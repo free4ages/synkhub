@@ -1,0 +1,56 @@
+name: 'test_sync_job'
+description: 'Test sync job for dashboard testing'
+max_concurrent_partitions: 2
+
+source_provider:
+  data_backend:
+    type: 'postgres'
+    connection:
+      host: 'localhost'
+      port: 5432
+      dbname: 'test_db'
+      user: 'test_user'
+      password: 'test_password'
+    table: 'source_table'
+    schema: 'public'
+
+destination_provider:
+  data_backend:
+    type: 'postgres'
+    connection:
+      host: 'localhost'
+      port: 5432
+      dbname: 'test_db'
+      user: 'test_user'
+      password: 'test_password'
+    table: 'dest_table'
+    schema: 'public'
+
+column_map:
+  - name: 'id'
+    src: 'id'
+    dest: 'id'
+    unique_key: true
+    order_key: true
+    dtype: 'int'
+  - name: 'name'
+    src: 'name'
+    dest: 'name'
+    dtype: 'varchar'
+
+partition_key: 'id'
+partition_step: 1000
+
+strategies:
+  - name: 'delta'
+    type: 'delta'
+    column: 'updated_at'
+    enabled: true
+    cron: '*/15 * * * *'  # Every 15 minutes
+    page_size: 1000
+  - name: 'full'
+    type: 'full'
+    column: 'id'
+    enabled: true
+    cron: '0 2 * * *'     # Daily at 2 AM
+    page_size: 5000

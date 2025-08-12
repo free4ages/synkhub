@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: synctool_postgres_test
+    environment:
+      POSTGRES_DB: synctool
+      POSTGRES_USER: rohitanand
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5437:5432"  # Using 5437 to avoid conflicts with local postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./tests/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rohitanand -d synctool"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synctool_network
+
+volumes:
+  postgres_data:
+
+networks:
+  synctool_network:
+    driver: bridge

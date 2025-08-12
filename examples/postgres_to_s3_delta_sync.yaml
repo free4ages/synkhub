@@ -1,0 +1,104 @@
+sync_job:
+  name: sync_users_postgres_to_s3_delta
+  description: Sync user data from Postgres to S3 using delta sync
+
+  source_provider:
+    type: postgres
+    connection:
+      host: source-db.local
+      port: 5432
+      dbname: users_db
+      user: source_user
+      password: secret
+      schema: public
+    table: users u
+    join:
+      - table: user_profiles p
+        on: u.id = p.user_id
+        type: left
+    filters:
+      - "u.status = 'active'"
+    columns:
+      - name: u.id
+        dest: user_id
+      - name: u.updated_at
+        dest: last_modified_at
+      - name: p.age
+        dest: user_age
+        insert: false
+
+  destination_provider:
+    type: object_storage
+    connection:
+      s3_bucket: my-data-bucket
+      s3_prefix: users/
+      aws_access_key_id: AKIA...
+      aws_secret_access_key: ...
+      region: us-east-1
+    table: users.parquet
+    supports_update: false
+
+  source_state_provider:
+    type: postgres
+    connection:
+      host: source-db.local
+      port: 5432
+      dbname: users_db
+      user: state_user
+      password: secret
+      schema: public
+    table: sync_state_users
+    column_mapping:
+      unique_key: ["user_id"]
+      partition_key: "user_id"
+      row_hash: "row_hash"
+      block_hash: "block_hash"
+
+  destination_state_provider:
+    type: object_storage
+    connection:
+      s3_bucket: my-sync-state
+      s3_prefix: users/state/
+      aws_access_key_id: AKIA...
+      aws_secret_access_key: ...
+      region: us-east-1
+    table: sync_state_users.parquet
+    column_mapping:
+      unique_key: ["user_id"]
+      partition_key: "last_modified_at"
+      row_hash: "row_hash"
+      block_hash: "block_hash"
+
+  partition:
+    strategy: range
+    column: u.updated_at
+    type: datetime
+    step: 86400  # 1 day in seconds
+
+  strategies:
+    - name: delta
+      type: delta
+      column: u.updated_at
+      column_type: datetime
+      partition_step: 1000
+      sub_partition_step: 100
+
+  enrichment:
+    enabled: true
+    dimensions:
+      - name: user_profile
+        join_key: user_id
+        source:
+          type: postgres
+          config:
+            table: user_profiles
+        fields:
+          - source: user_segment
+            dest: segment
+            transform: 'lambda x: "abc"+x'
+          - source: country
+            dest: country
+    transformations:
+      - column: user_age
+        transform: 'lambda x: str(x)'
+        dest: user_age_str

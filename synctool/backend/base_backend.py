@@ -1,0 +1,389 @@
+from synctool.utils.sql_builder import SqlBuilder
+import asyncio
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import timedelta
+from enum import Enum
+from dataclasses import dataclass
+
+from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
+from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column
+from ..core.column_mapper import ColumnSchema  # Add this import
+from ..core.enums import HashAlgo, BackendType
+from ..core.decorators import async_retry
+
+
+class UniversalDataType(Enum):
+    """Universal data types that map to all supported databases"""
+    # Numeric types
+    INTEGER = "integer"
+    BIGINT = "bigint"
+    SMALLINT = "smallint"
+    FLOAT = "float"
+    DOUBLE = "double"
+    DECIMAL = "decimal"
+    
+    # String types
+    VARCHAR = "varchar"
+    TEXT = "text"
+    CHAR = "char"
+    
+    # Date/Time types
+    DATE = "date"
+    TIME = "time"
+    TIMESTAMP = "timestamp"
+    DATETIME = "datetime"
+    
+    # Boolean types
+    BOOLEAN = "boolean"
+    
+    # Binary types
+    BLOB = "blob"
+    BINARY = "binary"
+    
+    # JSON types
+    JSON = "json"
+    
+    # Special types
+    UUID = "uuid"
+
+
+@dataclass
+class UniversalColumn:
+    """Universal column definition"""
+    name: str
+    data_type: UniversalDataType
+    nullable: bool = True
+    primary_key: bool = False
+    unique: bool = False
+    auto_increment: bool = False
+    default_value: Optional[str] = None
+    max_length: Optional[int] = None
+    precision: Optional[int] = None
+    scale: Optional[int] = None
+    comment: Optional[str] = None
+
+
+@dataclass
+class UniversalSchema:
+    """Universal schema definition"""
+    table_name: str
+    columns: List[UniversalColumn]
+    schema_name: Optional[str] = None
+    database_name: Optional[str] = None
+    primary_keys: Optional[List[str]] = None
+    indexes: Optional[List[Dict[str, Any]]] = None
+    engine: Optional[str] = None
+    comment: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.primary_keys is None:
+            self.primary_keys = []
+        if self.indexes is None:
+            self.indexes = []
+
+
+class BaseBackend(ABC):
+    """Base backend class for data and state operations"""
+    
+    def _get_full_table_name(self, tablename: Optional[str] = None)-> str:
+        tablename = tablename or self.table
+        table_name = ""
+        if self.schema:
+            table_name = f"{self.schema}.{tablename}"
+        if self.alias:
+            table_name = f"{table_name} {self.alias}"
+        return table_name
+
+    
+    @abstractmethod
+    async def connect(self):
+        """Establish connection to the provider"""
+        pass
+    
+    @abstractmethod
+    async def disconnect(self):
+        """Close connection to the provider"""
+        pass
+    
+    @abstractmethod
+    async def has_data(self) -> bool:
+        """Check if the provider has any data"""
+        pass
+
+    @abstractmethod
+    async def insert_partition_data(self, data: List[Dict], partition: Optional[Partition] = None, upsert: bool = False) -> int:
+        """Insert data into the provider"""
+        pass
+    
+    @abstractmethod
+    async def insert_delta_data(self, data: List[Dict], partition: Optional[Partition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
+        """Insert data into the provider"""
+        pass
+
+    @abstractmethod
+    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+        """Fetch data based on partition bounds with optional pagination"""
+        pass
+    
+    @abstractmethod
+    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+        """Fetch data based on partition bounds with optional pagination"""
+        pass
+
+    @abstractmethod
+    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+        """Fetch partition row hashes from destination along with state columns"""
+        pass
+
+    @abstractmethod
+    async def get_partition_bounds(self) -> Tuple[Any, Any]:
+        """Get the partition bounds"""
+        pass
+    
+    @abstractmethod
+    async def get_last_sync_point(self) -> Any:
+        """Get the last sync point"""
+        pass   
+
+    @abstractmethod
+    async def get_max_sync_point(self) -> Any:
+        """Get the maximum sync point"""
+        pass
+
+    @abstractmethod
+    async def fetch_child_partition_hashes(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+        """Fetch child hashes for a partition"""
+        pass
+
+    @abstractmethod
+    async def extract_table_schema(self, table_name: str) -> UniversalSchema:
+        """Extract table schema in universal format"""
+        pass
+    
+    @abstractmethod
+    def generate_create_table_ddl(self, schema: UniversalSchema, target_table_name: Optional[str] = None) -> str:
+        """Generate CREATE TABLE DDL for this backend type"""
+        pass
+    
+    @abstractmethod
+    def map_source_type_to_universal(self, source_type: str) -> UniversalDataType:
+        """Map database-specific type to universal type"""
+        pass
+    
+    @abstractmethod
+    def map_universal_type_to_target(self, universal_type: UniversalDataType) -> str:
+        """Map universal type to database-specific type"""
+        pass
+
+
+class Backend(BaseBackend):
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None):
+        self.config = config
+        self.provider_type = BackendType(config.type)
+        self.connection_config = ConnectionConfig(**config.connection) if config.connection else ConnectionConfig()
+        self.table = config.table
+        self.alias = config.alias
+        self.schema = self.connection_config.schema or config.schema or self._get_default_schema()
+        # Removed: self.columns = [ColumnConfig(**col) for col in config.columns] if config.columns else []
+        self.joins = [JoinConfig(**join) for join in config.join] if config.join else []
+        # Fix filter parsing - config.filters should be List[Dict] not List[str]
+        self.filters = [FilterConfig(**filter) for filter in (config.filters or []) if isinstance(filter, dict)]
+        self.supports_update = config.supports_update
+        # Removed: self.column_mapping = ColumnMapping(**config.column_mapping) if config.column_mapping else ColumnMapping()
+        self.column_schema = column_schema  # New: ColumnSchema instance
+        self.backend = config.backend
+        self.provider_config = config.config or {}
+        
+        self._connection_pool = None
+        self._lock = asyncio.Lock()
+    
+    async def __aenter__(self):
+        await self.connect()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.disconnect()
+
+
+class SqlBackend(Backend):
+    def _get_default_schema(self) -> Optional[str]:
+        return None
+    # Data operations
+    async def has_data(self) -> bool:
+        """Check if the provider has any data"""
+        schema_table = self._get_full_table_name()
+        query = f"SELECT COUNT(*) as count FROM {schema_table} LIMIT 1"
+        result = await self.execute_query(query)
+        return result.iloc[0]['count'] > 0
+    
+    
+
+    async def insert_partition_data(
+        self,
+        data: List[Dict],
+        partition: Optional[Partition] = None,
+        column_keys: Optional[List[str]] = None,
+        batch_size: int = 5000,
+        upsert: bool = False
+    ) -> int:
+        """Insert data into the provider"""
+        # Implementation depends on provider type
+        return len(data)
+    
+    async def insert_delta_data(
+        self,
+        data: List[Dict],
+        partition: Optional[Partition] = None,
+        column_keys: Optional[List[str]] = None,
+        batch_size: int = 5000,
+        upsert: bool = False
+    ) -> int:
+        """Insert data into the provider"""
+        # Implementation depends on provider type
+        return len(data)
+
+    
+    async def get_partition_bounds(self) -> Tuple[Any, Any]:
+        if not self.column_schema or not self.column_schema.partition_key:
+            raise ValueError("No partition key configured in column schema")
+        column = self.column_schema.partition_key.expr
+        """Get min and max values for partition column"""
+        query = f"SELECT MIN({column}) as min_val, MAX({column}) as max_val FROM {self.table}"
+        result = await self.execute_query(query)
+        return result[0]['min_val'], result[0]['max_val']
+    
+    async def get_last_sync_point(self) -> Any:
+        """Get the last sync point for a specific column type"""
+        if not self.column_schema or not self.column_schema.delta_key:
+            raise ValueError("No delta key configured in column schema")
+        column = self.column_schema.delta_key.expr
+        query = f"SELECT MAX({column}) as last_sync_point FROM {self.table}"
+        result = await self.execute_query(query)
+        return result[0]['last_sync_point']
+
+    async def get_max_sync_point(self) -> Any:
+        """Get the maximum sync point for a specific column type"""
+        if not self.column_schema or not self.column_schema.delta_key:
+            raise ValueError("No delta key configured in column schema")
+        column = self.column_schema.delta_key.expr
+        query = f"SELECT MAX({column}) as max_sync_point FROM {self.table}"
+        result = await self.execute_query(query)
+        return result[0]['max_sync_point']
+
+
+    
+    def _build_sql(self, query: Query) -> Tuple[str, List[Any]]:
+        return SqlBuilder.build(query)
+
+
+    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+        """Fetch data based on partition bounds with optional pagination"""
+        query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
+        sql, params = self._build_sql(query)
+        return await self.execute_query(sql, params)
+    
+    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+        """Fetch data based on partition bounds with optional pagination"""
+        if partition is None:
+            # Handle case where no partition is provided
+            query = Query(
+                select=self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
+                table=self._build_table_query(),
+                joins=self._build_join_query(),
+                filters=self._build_filter_query(),
+                limit=page_size,
+                offset=offset
+            )
+        else:
+            query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
+        sql, params = self._build_sql(query)
+        return await self.execute_query(sql, params)
+    
+    async def fetch_child_partition_hashes(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+        return []
+    
+
+    
+    def _process_pre_insert_data(self, data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        final = []
+        for d in data:
+            final.append(self.column_schema.transform_data(d))
+        return final
+    
+    def _build_partition_data_query(self, partition: Partition, partition_column=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
+        filters = self._build_filter_query()
+        if not self.column_schema or not self.column_schema.partition_key:
+            raise ValueError("No partition key configured in column schema")
+        partition_column = partition_column or self.column_schema.partition_key.expr
+        filters.extend([     
+            Filter(column=partition_column, operator=">=", value=partition.start),
+            Filter(column=partition_column, operator="<", value=partition.end)
+        ])
+        
+        # Add pagination if specified
+        limit = page_size if page_size is not None else None
+
+        return Query(
+            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
+            table= self._build_table_query(),
+            joins= self._build_join_query(),
+            filters= filters,
+            limit=limit,
+            offset=offset,
+            order_by=order_by
+        )
+    
+    
+    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH):
+        select = []
+        if not self.column_schema:
+            raise ValueError("No column schema configured")
+        
+        for col in self.column_schema.columns_to_fetch():
+            select.append(Field(expr=col.expr or col.name, alias=col.name))
+        
+        if with_hash:
+            hash_column = self.column_schema.hash_key
+            if hash_column:
+                # hash_columns is a list of Column objects
+                select.append(Field(expr=hash_column.expr, alias='hash__'))
+            else:
+                # Generate hash from all columns
+                hash_fields = [Field(expr=col.expr or col.name) for col in self.column_schema.columns if col.insert]
+                select.append(Field(expr="", alias="hash__", type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_fields)))
+        return select
+ 
+
+    def _build_table_query(self):
+        table = Table(
+            table=self.table or "",  # Ensure table is not None
+            schema=self.schema,
+            alias=self.alias
+        )
+        return table
+
+    def _build_join_query(self):
+        # Build joins
+        joins = []
+        if self.joins:
+            for join_cfg in self.joins or []:
+                joins.append(Join(
+                    table=join_cfg.table,
+                    alias=join_cfg.alias,
+                    on=join_cfg.on,
+                    type=join_cfg.type
+                ))
+        return joins
+    
+    def _build_filter_query(self):
+        # Build filters
+        filters = []
+        if self.filters:
+            for filter_cfg in self.filters or []:
+                filters.append(Filter(
+                    column=filter_cfg.column,
+                    operator=filter_cfg.operator,
+                    value=filter_cfg.value
+                ))
+        return filters
