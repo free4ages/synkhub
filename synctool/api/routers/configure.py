@@ -16,9 +16,33 @@ class DatabaseConnection(BaseModel):
     password: str
     db_schema: Optional[str] = None
 
+class TableInfo(BaseModel):
+    table_name: str
+    alias: str
+    schema_name: Optional[str] = None
+
+class FilterCondition(BaseModel):
+    field: str
+    operator: str  # =, !=, >, <, >=, <=, LIKE, IN, NOT IN, IS NULL, IS NOT NULL
+    value: Optional[Any] = None
+    table_alias: Optional[str] = None
+
+class JoinCondition(BaseModel):
+    table: str
+    alias: str
+    on: str
+    type: str  # INNER, LEFT, RIGHT, FULL
+
+class EnrichmentTransformation(BaseModel):
+    columns: List[str]
+    transform: str
+    dest: str
+    dtype: str
+
 class SchemaExtractionRequest(BaseModel):
     source_connection: DatabaseConnection
     table_name: str
+    additional_tables: Optional[List[TableInfo]] = []
 
 class ColumnMapping(BaseModel):
     name: str
@@ -39,10 +63,19 @@ class MigrationConfig(BaseModel):
     column_map: List[ColumnMapping]
     partition_key: Optional[str] = None
     partition_step: Optional[int] = None
+    # New fields for enhanced functionality
+    source_filters: Optional[List[FilterCondition]] = None
+    destination_filters: Optional[List[FilterCondition]] = None
+    joins: Optional[List[JoinCondition]] = None
+    enrichment: Optional[Dict[str, Any]] = None
 
 class DDLGenerationRequest(BaseModel):
     config: MigrationConfig
     destination_connection: DatabaseConnection
+
+class GenerateSuggestedConfigRequest(BaseModel):
+    schema_data: Dict[str, Any]
+    selected_columns: List[str]
 
 @router.post("/extract-schema")
 async def extract_schema(request: SchemaExtractionRequest):
@@ -82,9 +115,8 @@ async def extract_schema(request: SchemaExtractionRequest):
         universal_schema = await backend.extract_table_schema(request.table_name)
         await backend.disconnect()
         
-        
         # Convert to JSON-serializable format
-        schema_data = {
+        schema_data: Dict[str, Any] = {
             'table_name': universal_schema.table_name,
             'schema_name': universal_schema.schema_name,
             'database_name': universal_schema.database_name,
@@ -98,22 +130,117 @@ async def extract_schema(request: SchemaExtractionRequest):
                     'auto_increment': col.auto_increment,
                     'default_value': col.default_value,
                     'max_length': col.max_length,
-                    'comment': col.comment
+                    'comment': col.comment,
+                    'table_alias': 'main' if request.additional_tables else None  # Main table alias
                 }
                 for col in universal_schema.columns
             ],
             'primary_keys': universal_schema.primary_keys,
-            'indexes': universal_schema.indexes
+            'indexes': universal_schema.indexes,
+            'tables': [
+                {
+                    'table_name': request.table_name,
+                    'alias': 'main' if request.additional_tables else None,
+                    'schema_name': request.source_connection.db_schema
+                }
+            ]
         }
+        
+        # Add additional tables if provided
+        if request.additional_tables:
+            for table_info in request.additional_tables:
+                # Extract schema for additional table
+                additional_backend_config = BackendConfig(
+                    type=request.source_connection.type,
+                    connection={
+                        'host': request.source_connection.host,
+                        'port': request.source_connection.port,
+                        'database': request.source_connection.database,
+                        'user': request.source_connection.user,
+                        'password': request.source_connection.password,
+                        'schema': table_info.schema_name or request.source_connection.db_schema
+                    },
+                    table=table_info.table_name
+                )
+                
+                await backend.connect()
+                additional_schema = await backend.extract_table_schema(table_info.table_name)
+                await backend.disconnect()
+                
+                # Add columns from additional table
+                columns_list = schema_data['columns']
+                for col in additional_schema.columns:
+                    columns_list.append({
+                        'name': col.name,
+                        'data_type': col.data_type.value,
+                        'nullable': col.nullable,
+                        'primary_key': col.primary_key,
+                        'unique': col.unique,
+                        'auto_increment': col.auto_increment,
+                        'default_value': col.default_value,
+                        'max_length': col.max_length,
+                        'comment': col.comment,
+                        'table_alias': table_info.alias
+                    })
+                
+                # Add table info
+                tables_list = schema_data['tables']
+                tables_list.append({
+                    'table_name': table_info.table_name,
+                    'alias': table_info.alias,
+                    'schema_name': table_info.schema_name
+                })
+        
         return {
             'success': True,
-            'schema': schema_data,
-            'suggested_config': _generate_suggested_config(universal_schema, request.source_connection)
+            'schema': schema_data
         }
         
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Schema extraction failed: {str(e)}")
+
+@router.post("/generate-suggested-config")
+async def generate_suggested_config(request: GenerateSuggestedConfigRequest):
+    """Generate suggested configuration based on selected columns"""
+    try:
+        # Filter columns based on selection
+        selected_columns = []
+        for col in request.schema_data['columns']:
+            if col['name'] in request.selected_columns:
+                selected_columns.append(col)
+        
+        # Create a mock universal schema with selected columns
+        from synctool.backend.base_backend import UniversalSchema, UniversalColumn, UniversalDataType
+        
+        columns = []
+        for col_data in selected_columns:
+            column = UniversalColumn(
+                name=col_data['name'],
+                data_type=UniversalDataType(col_data['data_type']),
+                nullable=col_data['nullable'],
+                primary_key=col_data['primary_key'],
+                unique=col_data['unique'],
+                auto_increment=col_data['auto_increment'],
+                default_value=col_data.get('default_value'),
+                max_length=col_data.get('max_length'),
+                comment=col_data.get('comment')
+            )
+            columns.append(column)
+        
+        mock_schema = UniversalSchema(
+            table_name=request.schema_data['table_name'],
+            columns=columns,
+            primary_keys=[col.name for col in columns if col.primary_key]
+        )
+        
+        # Generate config based on selected columns
+        config = _generate_suggested_config_from_columns(mock_schema, selected_columns)
+        
+        return config
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate suggested config: {str(e)}")
 
 @router.post("/generate-ddl")
 async def generate_ddl(request: DDLGenerationRequest):
@@ -184,6 +311,19 @@ async def validate_config(config: MigrationConfig):
         if config.partition_key and not any(col.name == config.partition_key for col in config.column_map):
             errors.append(f"Partition key '{config.partition_key}' not found in column map")
         
+        # Validate joins if multiple tables are involved
+        if config.joins and len(config.joins) > 0:
+            for join in config.joins:
+                if not join.table or not join.alias or not join.on:
+                    errors.append("Join conditions must specify table, alias, and join condition")
+        
+        # Validate enrichment if present
+        if config.enrichment and config.enrichment.get('enabled'):
+            transformations = config.enrichment.get('transformations', [])
+            for i, transform in enumerate(transformations):
+                if not transform.get('columns') or not transform.get('transform') or not transform.get('dest'):
+                    errors.append(f"Enrichment transformation {i+1} must specify columns, transform, and destination")
+        
         return {
             'valid': len(errors) == 0,
             'errors': errors
@@ -195,58 +335,149 @@ async def validate_config(config: MigrationConfig):
             'errors': [f"Validation failed: {str(e)}"]
         }
 
-def _generate_suggested_config(universal_schema, source_connection: DatabaseConnection) -> Dict[str, Any]:
-    """Generate suggested configuration based on extracted schema"""
+# def _generate_suggested_config(universal_schema, source_connection: DatabaseConnection, additional_tables: List[TableInfo]) -> Dict[str, Any]:
+#     """Generate suggested configuration based on extracted schema"""
+#     column_map = []
+    
+#     for col in universal_schema.columns:
+#         column_mapping = {
+#             'name': col.name,
+#             'src': col.name,  # Default to same name
+#             'dest': col.name,
+#             'dtype': col.data_type.value,
+#             'unique_key': col.primary_key,  # Suggest primary keys as unique keys for sync
+#             'order_key': col.primary_key,   # Suggest primary keys as order keys
+#             'hash_key': False,  # Default to false
+#             'insert': True,
+#             'direction': 'asc' if col.primary_key else None  # 'asc' if order_key is True, else null
+#         }
+#         column_map.append(column_mapping)
+    
+#     # Add a computed hash key column for sync operations
+#     hash_key_column = {
+#         'name': 'checksum',
+#         'src': None,  # Computed column
+#         'dest': 'checksum',
+#         'dtype': 'varchar',
+#         'unique_key': False,
+#         'order_key': False,
+#         'hash_key': True,  # This is the hash key for change detection
+#         'insert': True,
+#         'direction': None  # No direction for hash key column
+#     }
+#     column_map.append(hash_key_column)
+    
+#     # Build source provider config
+#     source_provider = {
+#         'data_backend': {
+#             'type': source_connection.type,
+#             'connection': {
+#                 'host': source_connection.host,
+#                 'port': source_connection.port,
+#                 'database': source_connection.database,
+#                 'user': source_connection.user,
+#                 'password': source_connection.password,
+#                 'schema': source_connection.db_schema
+#             },
+#             'table': universal_schema.table_name,
+#             'alias': 'main'
+#         }
+#     }
+    
+#     # Add joins if additional tables are provided
+#     if additional_tables:
+#         joins = []
+#         for table_info in additional_tables:
+#             joins.append({
+#                 'table': table_info.table_name,
+#                 'alias': table_info.alias,
+#                 'on': f"main.id = {table_info.alias}.main_id",  # Default join condition
+#                 'type': 'LEFT'
+#             })
+#         source_provider['data_backend']['joins'] = joins
+    
+#     return {
+#         'name': f'{universal_schema.table_name}_migration',
+#         'description': f'Migration from {source_connection.type} to destination with sync configuration',
+#         'source_provider': source_provider,
+#         'destination_provider': {
+#             'data_backend': {
+#                 'type': 'postgres',  # Default destination
+#                 'connection': {
+#                     'host': 'localhost',
+#                     'port': 5432,
+#                     'database': 'destination_db',
+#                     'user': 'user',
+#                     'password': 'password'
+#                 },
+#                 'table': f'{universal_schema.table_name}_migrated'
+#             }
+#         },
+#         'column_map': column_map,
+#         'partition_key': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
+#         'partition_step': 1000,
+#         'source_filters': [],
+#         'destination_filters': [],
+#         'joins': additional_tables if additional_tables else None,
+#         'enrichment': {
+#             'enabled': False,
+#             'transformations': []
+#         }
+#     }
+
+def _generate_suggested_config_from_columns(universal_schema, selected_columns: List[Dict]) -> Dict[str, Any]:
+    """Generate suggested configuration based on selected columns"""
     column_map = []
     
-    for col in universal_schema.columns:
+    for col_data in selected_columns:
         column_mapping = {
-            'name': col.name,
-            'src': col.name,  # Default to same name
-            'dest': col.name,
-            'dtype': col.data_type.value,
-            'unique_key': col.primary_key,  # Suggest primary keys as unique keys for sync
-            'order_key': col.primary_key,   # Suggest primary keys as order keys
-            'hash_key': False,  # Default to false
+            'name': col_data['name'],
+            'src': col_data['table_alias'] + '.' + col_data['name'] if col_data.get('table_alias') else col_data['name'],
+            'dest': col_data['name'],
+            'dtype': col_data['data_type'],
+            'unique_key': col_data['primary_key'],
+            'order_key': col_data['primary_key'],
+            'hash_key': False,
             'insert': True,
-            'direction': 'asc' if col.primary_key else None  # 'asc' if order_key is True, else null
+            'direction': 'asc' if col_data['primary_key'] else None
         }
         column_map.append(column_mapping)
     
-    # Add a computed hash key column for sync operations
-    hash_key_column = {
-        'name': 'checksum',
-        'src': None,  # Computed column
-        'dest': 'checksum',
-        'dtype': 'varchar',
-        'unique_key': False,
-        'order_key': False,
-        'hash_key': True,  # This is the hash key for change detection
-        'insert': True,
-        'direction': None  # No direction for hash key column
-    }
-    column_map.append(hash_key_column)
+    # # Add a computed hash key column for sync operations
+    # hash_key_column = {
+    #     'name': 'checksum',
+    #     'src': None,
+    #     'dest': 'checksum',
+    #     'dtype': 'varchar',
+    #     'unique_key': False,
+    #     'order_key': False,
+    #     'hash_key': True,
+    #     'insert': True,
+    #     'direction': None
+    # }
+    # column_map.append(hash_key_column)
     
     return {
         'name': f'{universal_schema.table_name}_migration',
-        'description': f'Migration from {source_connection.type} to destination with sync configuration',
+        'description': f'Migration with selected columns',
         'source_provider': {
             'data_backend': {
-                'type': source_connection.type,
+                'type': 'postgres',
                 'connection': {
-                    'host': source_connection.host,
-                    'port': source_connection.port,
-                    'database': source_connection.database,
-                    'user': source_connection.user,
-                    'password': source_connection.password,
-                    'schema': source_connection.db_schema
+                    'host': 'localhost',
+                    'port': 5432,
+                    'database': 'source_db',
+                    'user': 'user',
+                    'password': 'password',
+                    'schema': 'public'
                 },
-                'table': universal_schema.table_name
+                'table': universal_schema.table_name,
+                'alias': 'main'
             }
         },
         'destination_provider': {
             'data_backend': {
-                'type': 'postgres',  # Default destination
+                'type': 'postgres',
                 'connection': {
                     'host': 'localhost',
                     'port': 5432,
@@ -259,7 +490,21 @@ def _generate_suggested_config(universal_schema, source_connection: DatabaseConn
         },
         'column_map': column_map,
         'partition_key': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
-        'partition_step': 1000
+        'partition_step': 1000,
+        'source_filters': [],
+        'destination_filters': [],
+        'joins': None,
+        'enrichment': {
+            'enabled': False,
+            'transformations': [
+                {
+                    'columns': ['hash__'],
+                    'transform': 'lambda x: x["hash__"]',
+                    'dest': 'checksum',
+                    'dtype': 'varchar'
+                }
+            ]
+        }
     }
 
 def _config_to_universal_schema(config: MigrationConfig):

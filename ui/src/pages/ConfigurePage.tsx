@@ -7,13 +7,16 @@ import {
   DatabaseConnection,
   ExtractedSchema,
   MigrationConfig,
-  ColumnMapping
+  ColumnMapping,
+  TableInfo,
+  EnrichmentTransformation
 } from '../types/configure';
 
 // Step Components
 import { ConnectionStep } from '../components/configure/ConnectionStep';
 import { SchemaExtractionStep } from '../components/configure/SchemaExtractionStep';
 import { ConfigurationStep } from '../components/configure/ConfigurationStep';
+import { EnrichmentStep } from '../components/configure/EnrichmentStep';
 import { ConfigEditorStep } from '../components/configure/ConfigEditorStep';
 import { DDLGenerationStep } from '../components/configure/DDLGenerationStep';
 
@@ -34,6 +37,11 @@ const steps: StepperStep[] = [
     description: 'Configure column mapping'
   },
   {
+    id: 'enrichment',
+    title: 'Enrichment',
+    description: 'Define transformations'
+  },
+  {
     id: 'config-editor',
     title: 'Edit Config',
     description: 'Edit YAML/JSON config'
@@ -52,6 +60,7 @@ export const ConfigurePage: React.FC = () => {
   // Step 1: Connection
   const [sourceConnection, setSourceConnection] = useState<DatabaseConnection | null>(null);
   const [tableName, setTableName] = useState('');
+  const [tables, setTables] = useState<TableInfo[]>([]);
   
   // Step 2: Schema
   const [extractedSchema, setExtractedSchema] = useState<ExtractedSchema | null>(null);
@@ -60,11 +69,14 @@ export const ConfigurePage: React.FC = () => {
   // Step 3: Configuration
   const [migrationConfig, setMigrationConfig] = useState<MigrationConfig | null>(null);
   
-  // Step 4: Config Editor
+  // Step 4: Enrichment
+  const [enrichmentTransformations, setEnrichmentTransformations] = useState<EnrichmentTransformation[]>([]);
+  
+  // Step 5: Config Editor
   const [editedConfig, setEditedConfig] = useState<MigrationConfig | null>(null);
   const [configEditorMode, setConfigEditorMode] = useState<'yaml' | 'json'>('yaml');
   
-  // Step 5: DDL
+  // Step 6: DDL
   const [destinationConnection, setDestinationConnection] = useState<DatabaseConnection | null>(null);
   const [generatedDDL, setGeneratedDDL] = useState('');
   const [configYaml, setConfigYaml] = useState('');
@@ -85,10 +97,11 @@ export const ConfigurePage: React.FC = () => {
       // Extract schema
       setIsLoading(true);
       try {
-        const response = await configureApi.extractSchema(sourceConnection, tableName);
+        const response = await configureApi.extractSchema(sourceConnection, tableName, tables);
         setExtractedSchema(response.schema);
-        setSuggestedConfig(response.suggested_config);
-        setMigrationConfig(response.suggested_config);
+        // Remove suggested_config since it's no longer returned by extract-schema
+        setSuggestedConfig(null);
+        setMigrationConfig(null);
         setCurrentStep(1);
       } catch (error) {
         console.error('Schema extraction failed:', error);
@@ -109,29 +122,32 @@ export const ConfigurePage: React.FC = () => {
         alert('Please configure the migration settings');
         return;
       }
+      setCurrentStep(3);
+    } else if (currentStep === 3) {
+      // Enrichment step - optional, can proceed without transformations
+      setCurrentStep(4);
+    } else if (currentStep === 4) {
+      // Validate config editor step
+      if (!editedConfig) {
+        alert('Please edit the configuration');
+        return;
+      }
       
       // Validate config
       setIsLoading(true);
       try {
-        const validation = await configureApi.validateConfig(migrationConfig);
+        const validation = await configureApi.validateConfig(editedConfig);
         if (!validation.valid) {
           alert(`Configuration validation failed:\n${validation.errors.join('\n')}`);
           return;
         }
-        setCurrentStep(3);
+        setCurrentStep(5);
       } catch (error) {
         console.error('Config validation failed:', error);
         alert('Failed to validate configuration');
       } finally {
         setIsLoading(false);
       }
-    } else if (currentStep === 3) {
-      // Validate config editor step
-      if (!editedConfig) {
-        alert('Please edit the configuration');
-        return;
-      }
-      setCurrentStep(4);
     }
   };
 
@@ -162,6 +178,21 @@ export const ConfigurePage: React.FC = () => {
     }
   };
 
+  const handleEnrichmentColumnMappingsUpdate = (mappings: ColumnMapping[]) => {
+    if (migrationConfig) {
+      // Add enrichment columns to the existing column mappings
+      const updatedColumnMap = [...migrationConfig.column_map, ...mappings];
+      setMigrationConfig({
+        ...migrationConfig,
+        column_map: updatedColumnMap,
+        enrichment: {
+          enabled: enrichmentTransformations.length > 0,
+          transformations: enrichmentTransformations
+        }
+      });
+    }
+  };
+
   const canProceed = () => {
     switch (currentStep) {
       case 0:
@@ -171,8 +202,10 @@ export const ConfigurePage: React.FC = () => {
       case 2:
         return !!migrationConfig;
       case 3:
-        return !!editedConfig;
+        return true; // Enrichment is optional
       case 4:
+        return !!editedConfig;
+      case 5:
         return !!(editedConfig && destinationConnection);
       default:
         return false;
@@ -188,6 +221,8 @@ export const ConfigurePage: React.FC = () => {
             onSourceConnectionChange={setSourceConnection}
             tableName={tableName}
             onTableNameChange={setTableName}
+            tables={tables}
+            onTablesChange={setTables}
           />
         );
       case 1:
@@ -195,6 +230,10 @@ export const ConfigurePage: React.FC = () => {
           <SchemaExtractionStep
             schema={extractedSchema}
             suggestedConfig={suggestedConfig}
+            onSuggestedConfigChange={(config) => {
+              setSuggestedConfig(config);
+              setMigrationConfig(config);
+            }}
           />
         );
       case 2:
@@ -203,9 +242,19 @@ export const ConfigurePage: React.FC = () => {
             config={migrationConfig}
             onConfigChange={setMigrationConfig}
             schema={extractedSchema}
+            availableColumns={extractedSchema?.columns || []}
           />
         );
       case 3:
+        return (
+          <EnrichmentStep
+            transformations={enrichmentTransformations}
+            onTransformationsChange={setEnrichmentTransformations}
+            availableColumns={extractedSchema?.columns.map(col => col.name) || []}
+            onColumnMappingsUpdate={handleEnrichmentColumnMappingsUpdate}
+          />
+        );
+      case 4:
         return (
           <ConfigEditorStep
             config={migrationConfig}
@@ -214,7 +263,7 @@ export const ConfigurePage: React.FC = () => {
             onModeChange={setConfigEditorMode}
           />
         );
-      case 4:
+      case 5:
         return (
           <DDLGenerationStep
             destinationConnection={destinationConnection}

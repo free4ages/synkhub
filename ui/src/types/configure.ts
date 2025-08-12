@@ -8,6 +8,12 @@ export interface DatabaseConnection {
   db_schema?: string;
 }
 
+export interface TableInfo {
+  table_name: string;
+  alias: string;
+  schema_name?: string;
+}
+
 export interface ColumnInfo {
   name: string;
   data_type: string;
@@ -18,6 +24,7 @@ export interface ColumnInfo {
   default_value?: string;
   max_length?: number;
   comment?: string;
+  table_alias?: string; // For multi-table support
 }
 
 export interface ExtractedSchema {
@@ -27,6 +34,8 @@ export interface ExtractedSchema {
   columns: ColumnInfo[];
   primary_keys: string[];
   indexes: any[];
+  // For multi-table support
+  tables?: TableInfo[];
 }
 
 export interface ColumnMapping {
@@ -41,6 +50,27 @@ export interface ColumnMapping {
   direction?: string;     // Sort direction for order_key (asc/desc)
 }
 
+export interface FilterCondition {
+  field: string;
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'LIKE' | 'IN' | 'NOT IN' | 'IS NULL' | 'IS NOT NULL';
+  value?: string | number | boolean | string[];
+  table_alias?: string;
+}
+
+export interface JoinCondition {
+  table: string;
+  alias: string;
+  on: string;
+  type: 'INNER' | 'LEFT' | 'RIGHT' | 'FULL';
+}
+
+export interface EnrichmentTransformation {
+  columns: string[];
+  transform: string;
+  dest: string;
+  dtype: string;
+}
+
 export interface MigrationConfig {
   name: string;
   description: string;
@@ -49,6 +79,14 @@ export interface MigrationConfig {
   column_map: ColumnMapping[];
   partition_key?: string;    // Column used for partitioning data during sync
   partition_step?: number;   // Number of records per partition
+  // New fields for enhanced functionality
+  source_filters?: FilterCondition[];
+  destination_filters?: FilterCondition[];
+  joins?: JoinCondition[];
+  enrichment?: {
+    enabled: boolean;
+    transformations: EnrichmentTransformation[];
+  };
 }
 
 export interface SchemaExtractionResponse {

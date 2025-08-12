@@ -123,3 +123,4 @@ enrichment:
         - last_name
       transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
       dest: 'name'
+      dtype: 'integer'
