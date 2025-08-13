@@ -135,9 +135,12 @@ class SchedulerCLI:
             
             # Create job manager with metrics (no locking for manual runs)
             metrics_storage = MetricsStorage(config.metrics_dir, config.max_runs_per_job)
+            from ..monitoring.logs_storage import LogsStorage
+            logs_storage = LogsStorage(config.logs_dir, config.max_runs_per_job)
             job_manager = SyncJobManager(
                 max_concurrent_jobs=1, 
-                metrics_storage=metrics_storage
+                metrics_storage=metrics_storage,
+                logs_storage=logs_storage
                 # No lock_manager for manual CLI runs
             )
             

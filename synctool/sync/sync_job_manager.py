@@ -8,6 +8,8 @@ if TYPE_CHECKING:
 
 from ..core.models import SyncJobConfig, SyncProgress
 from ..monitoring.metrics_collector import MetricsCollector
+from ..monitoring.logging_collector import LoggingCollector
+from ..monitoring.logs_storage import LogsStorage
 from .sync_engine import SyncEngine
 
 
@@ -16,10 +18,12 @@ class SyncJobManager:
     
     def __init__(self, max_concurrent_jobs: int = 2, 
                  metrics_storage: Optional['MetricsStorage'] = None,
-                 lock_manager: Optional['RedisLockManager'] = None):
+                 lock_manager: Optional['RedisLockManager'] = None,
+                 logs_storage: Optional[LogsStorage] = None):
         self.max_concurrent_jobs = max_concurrent_jobs
         self.metrics_storage = metrics_storage
         self.lock_manager = lock_manager
+        self.logs_storage = logs_storage
         self.active_jobs: Dict[str, SyncEngine] = {}
         self.job_semaphore = asyncio.Semaphore(max_concurrent_jobs)
         self.logger = logging.getLogger(f"{__name__}.SyncJobManager")
@@ -59,14 +63,20 @@ class SyncJobManager:
         """Execute the actual sync job with metrics collection"""
         job_name = config.name
         
-        # Initialize metrics collector if metrics_storage is provided
+        # Initialize metrics and logging collectors if storages are provided
         metrics_collector = None
+        logging_collector = None
         run_id = None
         if self.metrics_storage:
             metrics_collector = MetricsCollector(self.metrics_storage)
             run_id = metrics_collector.start_job_run(job_name, strategy_name)
             self.logger.info(f"Started metrics collection for job {job_name}, run {run_id}")
+        if self.logs_storage and run_id:
+            logging_collector = LoggingCollector(self.logs_storage)
+            logging_collector.start_job_run(job_name, run_id)
+            self.logger.info(f"Started logging collection for job {job_name}, run {run_id}")
         
+        result: Dict[str, Any] = {}
         try:
             self.logger.info(f"Starting sync job: {job_name} with strategy: {strategy_name}")
             
@@ -111,7 +121,6 @@ class SyncJobManager:
                 self.logger.info(f"Completed metrics collection for run {run_id}")
             
             self.logger.info(f"Completed sync job: {job_name}:{strategy_name}")
-            return result
             
         except Exception as e:
             # Finish job run with error
@@ -121,6 +130,11 @@ class SyncJobManager:
             
             self.logger.error(f"Failed sync job {job_name}:{strategy_name}: {e}")
             raise
+        finally:
+            # Ensure logging handler is removed
+            if logging_collector:
+                logging_collector.stop_job_run()
+        return result
     
     async def run_multiple_jobs(self, configs: List[SyncJobConfig],
                                progress_callback: Optional[Callable[[str, SyncProgress], None]] = None) -> Dict[str, Dict[str, Any]]:

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from ..core.models import SchedulerConfig
 from ..scheduler.file_scheduler import FileBasedScheduler
 from ..monitoring.metrics_storage import MetricsStorage
+from ..monitoring.logs_storage import LogsStorage
 from .state import app_state
 
 
@@ -39,9 +40,14 @@ async def lifespan(app: FastAPI):
         metrics_dir=str(config.metrics_dir),
         max_runs_per_job=config.max_runs_per_job
     )
+    app_state["logs_storage"] = LogsStorage(
+        logs_dir=str(config.logs_dir),
+        max_runs_per_job=config.max_runs_per_job
+    )
     
     logging.info(f"Using config directory: {config.config_dir}")
     logging.info(f"Using metrics directory: {config.metrics_dir}")
+    logging.info(f"Using logs directory: {config.logs_dir}")
     
     yield
     
@@ -176,6 +182,10 @@ async def api_status():
             active_runs += len([r for r in job_runs if r.status == "running"])
             failed_runs += len([r for r in job_runs if r.status == "failed"])
         
+        scheduler_config = app_state.get("scheduler_config")
+        metrics_dir_value = str(scheduler_config.metrics_dir) if scheduler_config else "unknown"
+        max_runs_value = scheduler_config.max_runs_per_job if scheduler_config else 50
+
         return {
             "status": "operational",
             "statistics": {
@@ -185,8 +195,8 @@ async def api_status():
                 "failed_runs": failed_runs
             },
             "config": {
-                "metrics_dir": str(app_state.get("scheduler_config").metrics_dir) if app_state.get("scheduler_config") else "unknown",
-                "max_runs_per_job": app_state.get("scheduler_config").max_runs_per_job if app_state.get("scheduler_config") else 50
+                "metrics_dir": metrics_dir_value,
+                "max_runs_per_job": max_runs_value
             }
         }
     

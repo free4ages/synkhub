@@ -6,6 +6,7 @@ import logging
 
 from ..models.api_models import RunSummary, RunDetail, LogEntry, ApiResponse
 from ...monitoring.metrics_storage import MetricsStorage
+from ...monitoring.logs_storage import LogsStorage
 from ...core.models import SchedulerConfig
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -19,6 +20,14 @@ def get_metrics_storage():
         raise HTTPException(status_code=500, detail="Metrics storage not initialized")
     return metrics_storage
 
+
+def get_logs_storage():
+    """Dependency to get logs storage instance"""
+    from ..state import app_state
+    logs_storage = app_state.get("logs_storage")
+    if not logs_storage:
+        raise HTTPException(status_code=500, detail="Logs storage not initialized")
+    return logs_storage
 
 @router.get("/{job_name}", response_model=List[RunSummary])
 async def list_job_runs(
@@ -111,45 +120,22 @@ async def get_run_logs(
     run_id: str,
     limit: int = Query(1000, description="Maximum number of log entries to return"),
     level: Optional[str] = Query(None, description="Filter by log level"),
+    logs: LogsStorage = Depends(get_logs_storage)
 ):
     """Get logs for a specific run"""
     try:
-        # For now, return mock logs since we haven't implemented log storage yet
-        # In a real implementation, this would read from log files or a log storage system
-        
-        mock_logs = [
-            LogEntry(
-                timestamp=datetime.now(),
-                level="INFO",
-                message=f"Started sync job: {job_name} with run_id: {run_id}",
-                run_id=run_id
-            ),
-            LogEntry(
-                timestamp=datetime.now(),
-                level="INFO",
-                message="Initializing providers and components",
-                run_id=run_id
-            ),
-            LogEntry(
-                timestamp=datetime.now(),
-                level="DEBUG",
-                message="Processing partitions with controlled concurrency",
-                run_id=run_id
-            ),
-            LogEntry(
-                timestamp=datetime.now(),
-                level="INFO",
-                message="Sync job completed successfully",
-                run_id=run_id
+        log_dicts = logs.get_run_logs(job_name, run_id, level=level, limit=limit)
+        log_entries: List[LogEntry] = []
+        for entry in log_dicts:
+            log_entries.append(
+                LogEntry(
+                    timestamp=entry["timestamp"],
+                    level=entry.get("level", "INFO"),
+                    message=entry.get("message", ""),
+                    run_id=entry.get("run_id", run_id),
+                )
             )
-        ]
-        
-        # Filter by level if provided
-        if level:
-            mock_logs = [log for log in mock_logs if log.level == level.upper()]
-        
-        # Apply limit
-        return mock_logs[:limit]
+        return log_entries
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get logs: {str(e)}")

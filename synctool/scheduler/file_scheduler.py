@@ -11,6 +11,7 @@ from ..config.config_loader import ConfigLoader
 from ..core.models import SyncJobConfig, SchedulerConfig
 from ..sync.sync_job_manager import SyncJobManager
 from ..monitoring.metrics_storage import MetricsStorage
+from ..monitoring.logs_storage import LogsStorage
 from .redis_lock_manager import RedisLockManager
 
 
@@ -28,16 +29,21 @@ class FileBasedScheduler:
             metrics_dir=scheduler_config.metrics_dir,
             max_runs_per_job=scheduler_config.max_runs_per_job
         )
+        self.logs_storage = LogsStorage(
+            logs_dir=scheduler_config.logs_dir,
+            max_runs_per_job=scheduler_config.max_runs_per_job
+        )
         self.lock_manager = RedisLockManager(
             redis_url=scheduler_config.redis_url,
             lock_timeout=scheduler_config.lock_timeout
         )
         
-        # Create job manager with both metrics and locking
+        # Create job manager with metrics, logging and locking
         self.job_manager = SyncJobManager(
             max_concurrent_jobs=4,
             metrics_storage=self.metrics_storage,
-            lock_manager=self.lock_manager
+            lock_manager=self.lock_manager,
+            logs_storage=self.logs_storage
         )
         
         # Track last run times for each strategy
