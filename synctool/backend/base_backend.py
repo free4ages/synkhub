@@ -1,86 +1,23 @@
 from synctool.utils.sql_builder import SqlBuilder
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import timedelta
+from typing import Dict, List, Optional, Any, Tuple, Union
+from datetime import timedelta, datetime, date, time
 from enum import Enum
 from dataclasses import dataclass
+import uuid
+import json
+import decimal
 
 from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
 from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column
 from ..core.column_mapper import ColumnSchema  # Add this import
 from ..core.enums import HashAlgo, BackendType
 from ..core.decorators import async_retry
+from ..core.schema_models import UniversalSchema, UniversalDataType
+from ..utils.schema_utils import cast_value
 
 
-class UniversalDataType(Enum):
-    """Universal data types that map to all supported databases"""
-    # Numeric types
-    INTEGER = "integer"
-    BIGINT = "bigint"
-    SMALLINT = "smallint"
-    FLOAT = "float"
-    DOUBLE = "double"
-    DECIMAL = "decimal"
-    
-    # String types
-    VARCHAR = "varchar"
-    TEXT = "text"
-    CHAR = "char"
-    
-    # Date/Time types
-    DATE = "date"
-    TIME = "time"
-    TIMESTAMP = "timestamp"
-    DATETIME = "datetime"
-    
-    # Boolean types
-    BOOLEAN = "boolean"
-    
-    # Binary types
-    BLOB = "blob"
-    BINARY = "binary"
-    
-    # JSON types
-    JSON = "json"
-    
-    # Special types
-    UUID = "uuid"
-
-
-@dataclass
-class UniversalColumn:
-    """Universal column definition"""
-    name: str
-    data_type: UniversalDataType
-    nullable: bool = True
-    primary_key: bool = False
-    unique: bool = False
-    auto_increment: bool = False
-    default_value: Optional[str] = None
-    max_length: Optional[int] = None
-    precision: Optional[int] = None
-    scale: Optional[int] = None
-    comment: Optional[str] = None
-
-
-@dataclass
-class UniversalSchema:
-    """Universal schema definition"""
-    table_name: str
-    columns: List[UniversalColumn]
-    schema_name: Optional[str] = None
-    database_name: Optional[str] = None
-    primary_keys: Optional[List[str]] = None
-    indexes: Optional[List[Dict[str, Any]]] = None
-    engine: Optional[str] = None
-    comment: Optional[str] = None
-    
-    def __post_init__(self):
-        if self.primary_keys is None:
-            self.primary_keys = []
-        if self.indexes is None:
-            self.indexes = []
 
 
 class BaseBackend(ABC):
@@ -315,11 +252,18 @@ class SqlBackend(Backend):
         filters = self._build_filter_query()
         if not self.column_schema or not self.column_schema.partition_key:
             raise ValueError("No partition key configured in column schema")
-        partition_column = partition_column or self.column_schema.partition_key.expr
-        filters.extend([     
-            Filter(column=partition_column, operator=">=", value=partition.start),
-            Filter(column=partition_column, operator="<", value=partition.end)
-        ])
+        partition_column = partition_column or self.column_schema.partition_key.name
+        column: Column = self.column_schema.column(partition_column)
+        if column.dtype in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+            filters.extend([     
+                Filter(column=column.expr, operator=">=", value=cast_value(partition.start, column.dtype)),
+                Filter(column=column.expr, operator="<=", value=cast_value(partition.end, column.dtype))
+            ])
+        else:
+            filters.extend([     
+                Filter(column=column.expr, operator=">=", value=cast_value(partition.start, column.dtype)),
+                Filter(column=column.expr, operator="<", value=cast_value(partition.end, column.dtype))
+            ])
         
         # Add pagination if specified
         limit = page_size if page_size is not None else None

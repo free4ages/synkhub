@@ -41,16 +41,10 @@ class SchedulerCLI:
             max_runs_per_job=args.max_runs_per_job
         )
         
-        # Setup logging
-        log_level = getattr(logging, args.log_level.upper())
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler(Path(config.logs_dir) / "scheduler.log")
-            ]
-        )
+        # Setup file logging for daemon mode (console logging is already configured globally)
+        file_handler = logging.FileHandler(Path(config.logs_dir) / "scheduler.log")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logging.getLogger().addHandler(file_handler)
         
         logger = logging.getLogger(__name__)
         logger.info(f"Starting Synctool scheduler with config directory: {config.config_dir}")
@@ -292,6 +286,11 @@ Examples:
         """
     )
     
+    # Add global arguments
+    parser.add_argument('--log-level', default='INFO', 
+                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                       help='Set the logging level')
+    
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
     # Start command
@@ -302,7 +301,6 @@ Examples:
     start_parser.add_argument('--metrics-dir', default='./data/metrics', help='Directory for metrics storage')
     start_parser.add_argument('--logs-dir', default='./data/logs', help='Directory for logs')
     start_parser.add_argument('--max-runs-per-job', type=int, default=50, help='Maximum runs to keep per job')
-    start_parser.add_argument('--log-level', default='INFO', help='Log level')
     
     # List command
     list_parser = subparsers.add_parser('list', help='List all available jobs')
@@ -325,6 +323,16 @@ Examples:
     validate_parser.add_argument('--config-dir', required=True, help='Directory containing job configs')
     
     args = parser.parse_args()
+    
+    # Setup global logging configuration for all CLI commands
+    log_level = getattr(logging, args.log_level.upper())
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
     
     if not args.command:
         parser.print_help()

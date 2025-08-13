@@ -1,4 +1,4 @@
-name: 'scheduled_postgres_sync'
+name: 'postgres_uuid_sync'
 description: 'Scheduled sync from Postgres to Postgres with cron expressions'
 max_concurrent_partitions: 1
 
@@ -11,11 +11,11 @@ source_provider:
       dbname: 'synctool'
       user: 'rohitanand'
       password: ''
-    table: 'users'
+    table: 'users1'
     alias: 'u'
     schema: 'public'
     join:
-      - table: 'user_profiles'
+      - table: 'user_profiles1'
         alias: 'p'
         'on': 'u.id = p.user_id'
         type: 'left'
@@ -27,10 +27,10 @@ destination_provider:
     connection:
       host: 'localhost'
       port: 5432
-      dbname: 'synctool'
+      dbname: 'synctool'  
       user: 'rohitanand'
       password: ''
-    table: 'user_profile'
+    table: 'user_profile1'
     schema: 'public_copy'
     supports_update: true
 
@@ -40,7 +40,7 @@ column_map:
     dest: 'user_id'
     unique_key: true
     order_key: true
-    dtype: 'integer'
+    dtype: 'uuid'
     direction: 'asc'
   - name: 'first_name'
     src: 'u.first_name'
@@ -74,16 +74,20 @@ column_map:
     dest: 'checksum'
     dtype: 'varchar'
     hash_key: true
+  - name: 'bio'
+    src: 'p.bio'
+    dest: 'bio'
+    dtype: 'text'
 
 partition_key: 'user_id'
-partition_step: 100
+partition_step: 45000000
 
 strategies:
   # Delta sync every 15 minutes
   - name: 'delta'
     type: 'delta'
     column: 'updated_at'
-    sub_partition_step: 1800  # 30 minutes
+    sub_partition_step: 60*60  # 1 hour
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
@@ -102,18 +106,11 @@ strategies:
     type: 'full'
     enabled: true
     column: 'user_id'
-    sub_partition_step: 10
-    page_size: 10
+    sub_partition_step: 4500000
+    page_size: null
+    use_pagination: false
     cron: '0 3 * * *'  # Daily at 3 AM
   
-  # Weekly full sync on Sunday at 2 AM (disabled by default)
-  - name: 'weekly_full'
-    type: 'full'
-    enabled: false
-    column: 'created_at'
-    sub_partition_step: 432000  # 5 days
-    page_size: 1000
-    cron: '0 2 * * 0'  # Weekly on Sunday at 2 AM
 
 enrichment:
   enabled: true
@@ -124,3 +121,8 @@ enrichment:
       transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
       dest: 'name'
       dtype: 'integer'
+    - columns:
+        - hash__
+      transform: 'lambda x: x["hash__"]'
+      dest: 'checksum'
+      dtype: 'varchar'

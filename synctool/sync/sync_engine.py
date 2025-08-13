@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import logging
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING
 
@@ -15,7 +16,7 @@ from ..utils.partition_generator import PartitionConfig, PartitionGenerator, add
 from ..utils.hash_calculator import HashCalculator
 from ..enrichment.enrichment_engine import EnrichmentEngine
 from .partition_processor import PartitionProcessor
-
+from ..core.schema_models import UniversalDataType
 
 class SyncEngine:
     """Main sync engine that orchestrates the sync process"""
@@ -64,6 +65,10 @@ class SyncEngine:
         column_mapper.build_schemas(list(self.strategies.values()), self.enrichment_engine)
         column_mapper.validate()
         self.column_mapper = column_mapper
+
+        #populate column_type for strategies
+        for strategy in self.strategies.values():
+            strategy.column_type = self.column_mapper.column(strategy.column).dtype
         
         # Create providers with appropriate ColumnSchema for both data and state
         self.source_provider = await self._create_provider(
@@ -131,15 +136,8 @@ class SyncEngine:
                 ))
                 partitions: list[Partition] = await partition_generator.generate_partitions(sync_start, sync_end)
             else:
-                # Single partition for the entire dataset
-                partitions = [Partition(
-                    start=sync_start,
-                    end=sync_end,
-                    column=strategy_config.column if strategy_config else "id",
-                    column_type=self.column_mapper.column(strategy_config.column).dtype,
-                    partition_step=self.config.partition_step,
-                    partition_id="full_dataset"
-                )]
+                raise ValueError("Sync bounds are not set")
+
             
             self.progress.total_partitions = len(partitions)
             self.logger.info(f"Processing {len(partitions)} partitions")
@@ -289,13 +287,17 @@ class SyncEngine:
             # Find full strategy
             full_strategy = next((s for s in self.strategies.values() if s.type == SyncStrategy.FULL), None)
             return SyncStrategy.FULL, full_strategy
+        elif strategy_name == "full":
+            hash_strategy = next((s for s in self.strategies.values() if s.type == SyncStrategy.HASH), None)
+            return SyncStrategy.HASH, hash_strategy
+
         
         if strategy_name:
             if strategy_name in self.strategies:
                 strategy_config = self.strategies[strategy_name]
-                if strategy_config.name == "delta":
+                if strategy_config.type == "delta":
                     return SyncStrategy.DELTA, strategy_config
-                elif strategy_config.name == "hash":
+                elif strategy_config.type == "hash":
                     return SyncStrategy.HASH, strategy_config
                 else:
                     return SyncStrategy.FULL, strategy_config
@@ -318,7 +320,14 @@ class SyncEngine:
             dest_start = await self.destination_provider.get_last_sync_point()
             source_end = await self.source_provider.get_max_sync_point()
             return dest_start, source_end
-        
+        if strategy_config.column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+            start = "00000000000000000000000000000000"
+            end = "ffffffffffffffffffffffffffffffff"
+            if strategy_config.column_type == UniversalDataType.UUID_TEXT_DASH:
+                return str(uuid.UUID(start)), str(uuid.UUID(end))
+            elif strategy_config.column_type == UniversalDataType.UUID_TEXT:
+                return start, end
+            return uuid.UUID(start), uuid.UUID(end)
 
         return await self.source_provider.get_partition_bounds()
     

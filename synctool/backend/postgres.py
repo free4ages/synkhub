@@ -8,9 +8,10 @@ from datetime import timedelta
 from synctool.core.enums import HashAlgo
 from synctool.core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
 from synctool.utils.sql_builder import SqlBuilder
-from .base_backend import SqlBackend, UniversalSchema, UniversalColumn, UniversalDataType
+from .base_backend import SqlBackend
 from ..core.models import Partition, BackendConfig
 from ..core.column_mapper import ColumnSchema
+from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 MAX_PG_PARAMS = 31000
 
@@ -198,7 +199,7 @@ class PostgresBackend(SqlBackend):
         partition_column = metadata.partition_column
         partition_column_type = metadata.partition_column_type
 
-        if partition_column_type == "int":
+        if partition_column_type == UniversalDataType.INTEGER:
             # For integer partition columns, we divide by the interval
             segments = []
             for idx in range(level+1):
@@ -211,7 +212,7 @@ class PostgresBackend(SqlBackend):
                 segments.append(f"{expr}::text")
             return " || '-' || ".join(segments)
 
-        elif partition_column_type == "datetime":
+        elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             segments = []
             for idx in range(level+1):
                 fct = intervals[idx]
@@ -271,7 +272,7 @@ class PostgresBackend(SqlBackend):
     def _build_sql(self, query: Query) -> Tuple[str, list]:
         """Build SQL query for PostgreSQL"""
         q = self._rewrite_query(query)
-        return SqlBuilder.build(q, dialect='postgres')
+        return SqlBuilder.build(q, dialect='asyncpg')
 
     def _build_partition_hash_query(self, partition: Partition, hash_algo: HashAlgo) -> Query:
         """Build partition hash query for PostgreSQL"""
@@ -314,17 +315,17 @@ class PostgresBackend(SqlBackend):
         grp_field = Field(expr="partition_id", type="column")
 
         filters = []
-        if partition_column_type=="datetime":
+        if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             filters += [
                 Filter(column=partition_column, operator='>=', value=start), 
                 Filter(column=partition_column, operator='<', value=end)
             ]
-        elif partition_column_type == "int":
+        elif partition_column_type == UniversalDataType.INTEGER:
             filters += [
                 Filter(column=partition_column, operator='>=', value=start), 
                 Filter(column=partition_column, operator='<', value=end)
             ]
-        elif partition_column_type == "str":
+        elif partition_column_type == UniversalDataType.VARCHAR:
             filters += [
                 Filter(column=partition_column, operator='>=', value=start), 
                 Filter(column=partition_column, operator='<', value=end)

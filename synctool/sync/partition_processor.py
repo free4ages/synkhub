@@ -33,7 +33,7 @@ class PartitionProcessor:
     async def process(self) -> Dict[str, Any]:
         """Process a single partition"""
         try:
-            self.logger.info(f"Processing partition {self.partition.partition_id} with strategy {self.strategy.value}")
+            self.logger.info(f"Processing partition {self.partition.partition_id} with strategy {self.strategy.value} from {self.partition.start} to {self.partition.end}")
             
             if self.strategy == SyncStrategy.FULL:
                 result = await self._process_full_sync()
@@ -55,7 +55,7 @@ class PartitionProcessor:
     async def _process_full_sync(self) -> Dict[str, Any]:
         """Process full sync for partition with pagination and subpartitioning"""
         rows_inserted = 0
-        page_size = getattr(self.strategy_config, 'page_size', 1000)  # Default to 1000 if not specified
+        page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
         
         sub_partition_config: PartitionConfig = PartitionConfig(
             name="sub_partition_{pid}",
@@ -67,24 +67,27 @@ class PartitionProcessor:
         sub_partitions: list[Partition] = await sub_partition_generator.generate_partitions(self.partition.start, self.partition.end, self.partition)
 
         # check if pagination is needed. it makes extra call without data
-        skip_pagination = False
-        if page_size >= self.strategy_config.sub_partition_step:
-            unique_keys = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_keys]
-            if len(unique_keys) == 1 and unique_keys[0] == self.partition.column:
-                skip_pagination = True
+        # if parition column is unique, we can skip pagination
+        use_pagination = self.strategy_config.use_pagination
+        # if page_size >= self.strategy_config.sub_partition_step:
+        #     unique_keys = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_keys]
+        #     if len(unique_keys) == 1 and unique_keys[0] == self.partition.column:
+        #         skip_pagination = True
         
         for sub_partition in sub_partitions:
             # Process subpartition with pagination
+            
             sub_partition_rows = 0
             offset = 0
             
             while True:
+                self.logger.info(f"Processing subpartition {sub_partition.partition_id} from {sub_partition.start} to {sub_partition.end} with page_size {page_size} and offset {offset}")
                 # Fetch paginated data from source
                 data: list[dict[str, Any]] = await self.sync_engine.source_provider.fetch_partition_data(
                     sub_partition, 
                     hash_algo=self.sync_engine.hash_algo,
-                    page_size=page_size if not skip_pagination else None,
-                    offset=offset if not skip_pagination else None
+                    page_size=page_size if use_pagination else None,
+                    offset=offset if use_pagination else None
                 )
                 
                 # If no data returned, we've processed all pages for this subpartition
@@ -102,13 +105,18 @@ class PartitionProcessor:
                 
                 sub_partition_rows += len(data)
                 rows_inserted += len(data)
+                if not use_pagination:
+                    break
+
+
                 offset += page_size
+
+
                 
                 # If we got fewer rows than page_size, we've reached the end
                 if len(data) < page_size:
                     break
-                if skip_pagination:
-                    break
+
 
         
         return {

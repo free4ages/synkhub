@@ -8,7 +8,7 @@ from synctool.utils.sql_builder import SqlBuilder
 from .base_backend import SqlBackend
 from ..core.models import Partition
 from ..core.column_mapper import ColumnSchema
-from .base_backend import UniversalSchema, UniversalColumn, UniversalDataType
+from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 MAX_MYSQL_PARAMS = 65535  # MySQL limit for placeholders
 
@@ -85,7 +85,7 @@ class MySQLBackend(SqlBackend):
         col = metadata.partition_column
         col_type = metadata.partition_column_type
 
-        if col_type == "int":
+        if col_type == UniversalDataType.INTEGER:
             segments = []
             for idx in range(level + 1):
                 if idx == 0:
@@ -96,7 +96,7 @@ class MySQLBackend(SqlBackend):
                 segments.append(f"CAST({expr} AS CHAR)")
             return " , '-' , ".join(segments)
 
-        elif col_type == "datetime":
+        elif col_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             segments = []
             for idx in range(level + 1):
                 if idx == 0:

@@ -61,6 +61,7 @@ class ColumnSchema:
         if self.hash_key:
             new_data[self.hash_key.expr] = data['hash__']
         return new_data
+    
 
 
 
@@ -70,6 +71,11 @@ class ColumnMapper:
         self.schemas = {}
 
     def build_schemas(self, strategies: List[StrategyConfig], enrichment_engine: Optional[EnrichmentEngine]=None) -> Dict[str, ColumnSchema]:
+        """
+        Builds the column schemas for the source, destination, source state, destination state, and common columns.
+        Adds columns from column_map to the schemas. Also adds enriched columns from enrichment_engine.
+        Also sets roles from strategies.
+        """
         source_cols, dest_cols, source_state_cols, dest_state_cols, common_cols = [], [], [], [], []
         delta_key, partition_key, hash_partition_key = None, None, None
         for strategy in strategies:
@@ -81,6 +87,7 @@ class ColumnMapper:
                 hash_partition_key = strategy.column
         assert hash_partition_key == partition_key, "Hash partition key and partition key must be the same"
         # @TODO: Add enrichment keys to the schema
+        enriched_column_details: dict[str, Dict[str, Any]] = {c["dest"]: c for c in (enrichment_engine.get_enriched_column_details() if enrichment_engine else [])}
 
         for f in self.field_map:
             roles = []
@@ -90,8 +97,21 @@ class ColumnMapper:
             src_state: Any | None = f.get("src_state")
             dest_state: Any | None = f.get("dest_state")
             dtype: Any | None = f.get("dtype")
+            dest_dtype: Any | None = f.get("dest_dtype") or f.get("dtype")
             insert: bool = f.get("insert", True)
             expr_map: dict[str, str | None] = dict(source=src, destination=dest, source_state=src_state, destination_state=dest_state)
+            if dest in enriched_column_details:
+                # if dtype is not provided, use the dtype from the enriched column details
+                if not dtype:
+                    dtype = enriched_column_details[dest]["dtype"]
+                # if dest_dtype is not provided, use the dtype from the enriched column details
+                if not dest_dtype:
+                    dest_dtype = enriched_column_details[dest]["dtype"]
+                # if insert is not provided, use the insert from the enriched column details
+                insert = True
+                enriched_column_details.pop(dest)
+            if f.get("enriched_key"):
+                roles.append("enriched_key")
             if f.get("unique_key"):
                 roles.append("unique_key")
             if f.get("order_key"):
@@ -111,14 +131,18 @@ class ColumnMapper:
                 source_cols.append(Column(name=name, expr=src, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
             # Destination
             if insert:
-                dest_cols.append(Column(name=name, expr=dest, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
+                dest_cols.append(Column(name=name, expr=dest, dtype=dest_dtype, roles=roles, insert=True, expr_map=expr_map))
 
             # Source state
             if src_state:
                 source_state_cols.append(Column(name=name, expr=src_state, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
             # Destination state
             if dest_state and insert:
-                dest_state_cols.append(Column(name=name, expr=dest_state, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
+                dest_state_cols.append(Column(name=name, expr=dest_state, dtype=dest_dtype, roles=roles, insert=True, expr_map=expr_map))
+        for dest, details in enriched_column_details.items():
+            expr_map: dict[str, str | None] = dict(source=None, destination=dest, source_state=None, destination_state=None)
+            dest_cols.append(Column(name=dest, expr=dest, dtype=details.get("dtype"), roles=["enriched_key"], insert=True, expr_map=expr_map))
+            common_cols.append(Column(name=dest, expr=dest, dtype=details.get("dtype"), roles=["enriched_key"], insert=True, expr_map=expr_map))
 
         self.schemas = {
             "common": ColumnSchema(common_cols),

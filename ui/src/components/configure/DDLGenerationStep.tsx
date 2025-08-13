@@ -35,9 +35,34 @@ export const DDLGenerationStep: React.FC<DDLGenerationStepProps> = ({
   const configToString = (config: MigrationConfig, format: 'yaml' | 'json'): string => {
     try {
       if (format === 'yaml') {
+        // Merge enrichment transformations with column_map
+        const mergedColumnMap = [...config.column_map];
+        
+        if (config.enrichment && config.enrichment.enabled && config.enrichment.transformations.length > 0) {
+          config.enrichment.transformations.forEach(transform => {
+            // Check if enrichment column already exists in column_map
+            const existingColumn = mergedColumnMap.find(col => col.name === transform.dest);
+            if (!existingColumn) {
+              // Add enrichment column to column_map with src as null
+              mergedColumnMap.push({
+                name: transform.dest,
+                src: null, // Enrichment fields have src as null
+                dest: transform.dest,
+                dtype: transform.dtype,
+                unique_key: false,
+                order_key: false,
+                hash_key: false,
+                insert: true,
+                direction: null
+              });
+            }
+          });
+        }
+        
         // Simple YAML conversion (you might want to use a proper YAML library)
         let yaml = `name: ${config.name}
 description: ${config.description}
+max_concurrent_partitions: 4
 source_provider:
   data_backend:
     type: ${config.source_provider.data_backend.type}
@@ -49,7 +74,37 @@ source_provider:
       password: ${config.source_provider.data_backend.connection.password}
       schema: ${config.source_provider.data_backend.connection.schema || 'null'}
     table: ${config.source_provider.data_backend.table}
-destination_provider:
+    alias: ${config.source_provider.data_backend.alias || 'null'}
+    schema: ${config.source_provider.data_backend.connection.schema || 'null'}`;
+
+        // Add filters to source provider if present
+        console.log('Processing source_filters:', config.source_filters);
+        console.log('Processing destination_filters:', config.destination_filters);
+        if (config.source_filters && config.source_filters.length > 0) {
+          yaml += `\n    filters:`;
+          config.source_filters.forEach(filter => {
+            yaml += `\n      - field: ${filter.field}
+        operator: ${filter.operator}
+        value: ${filter.value !== undefined ? filter.value : 'null'}
+        table_alias: ${filter.table_alias || 'null'}`;
+          });
+        } else {
+          yaml += `\n    filters: []`;
+        }
+
+        // Add joins to source provider if present
+        console.log('Processing joins:', config.joins);
+        if (config.joins && config.joins.length > 0) {
+          yaml += `\n    join:`;
+          config.joins.forEach(join => {
+            yaml += `\n      - table: ${join.table}
+        alias: ${join.alias}
+        on: ${join.on}
+        type: ${join.type}`;
+          });
+        }
+
+        yaml += `\ndestination_provider:
   data_backend:
     type: ${config.destination_provider.data_backend.type}
     connection:
@@ -60,8 +115,24 @@ destination_provider:
       password: ${config.destination_provider.data_backend.connection.password}
       schema: ${config.destination_provider.data_backend.connection.schema || 'null'}
     table: ${config.destination_provider.data_backend.table}
-column_map:
-${config.column_map.map(col => `  - name: ${col.name}
+    schema: ${config.destination_provider.data_backend.connection.schema || 'null'}
+    supports_update: true`;
+
+        // Add destination filters if present
+        if (config.destination_filters && config.destination_filters.length > 0) {
+          yaml += `\n    filters:`;
+          config.destination_filters.forEach(filter => {
+            yaml += `\n      - field: ${filter.field}
+        operator: ${filter.operator}
+        value: ${filter.value !== undefined ? filter.value : 'null'}
+        table_alias: ${filter.table_alias || 'null'}`;
+          });
+        } else {
+          yaml += `\n    filters: []`;
+        }
+
+        yaml += `\ncolumn_map:
+${mergedColumnMap.map(col => `  - name: ${col.name}
     src: ${col.src || 'null'}
     dest: ${col.dest || 'null'}
     dtype: ${col.dtype || 'null'}
@@ -72,6 +143,8 @@ ${config.column_map.map(col => `  - name: ${col.name}
     direction: ${col.direction || 'null'}`).join('\n')}
 partition_key: ${config.partition_key || 'null'}
 partition_step: ${config.partition_step || 'null'}`;
+
+
 
         // Add strategies if present
         if (config.strategies && config.strategies.length > 0) {
@@ -96,7 +169,8 @@ partition_step: ${config.partition_step || 'null'}`;
   enabled: ${config.enrichment.enabled}
   transformations:`;
           config.enrichment.transformations.forEach(transform => {
-            yaml += `\n    - columns: [${transform.columns.join(', ')}]
+            yaml += `\n    - columns:
+        - ${transform.columns.join('\n        - ')}
       transform: ${transform.transform}
       dest: ${transform.dest}
       dtype: ${transform.dtype}`;
@@ -139,6 +213,15 @@ partition_step: ${config.partition_step || 'null'}`;
               currentSection = key;
               config[key] = { data_backend: { connection: {} } };
             } else if (key === 'column_map') {
+              currentArray = key;
+              config[key] = [];
+            } else if (key === 'source_filters') {
+              currentArray = key;
+              config[key] = [];
+            } else if (key === 'destination_filters') {
+              currentArray = key;
+              config[key] = [];
+            } else if (key === 'joins') {
               currentArray = key;
               config[key] = [];
             } else if (key === 'strategies') {
@@ -196,6 +279,60 @@ partition_step: ${config.partition_step || 'null'}`;
               if (Object.keys(strategy).length > 0) {
                 config.strategies.push(strategy);
               }
+            } else if (currentArray === 'source_filters' && key.startsWith('-')) {
+              // Handle source filters array items
+              const filter: any = {};
+              const filterLines = lines.slice(lines.indexOf(line));
+              for (const filtLine of filterLines) {
+                const filtTrimmed = filtLine.trim();
+                if (filtTrimmed.startsWith('-') || filtTrimmed === '') continue;
+                if (filtTrimmed.includes(':')) {
+                  const [filtKey, ...filtValueParts] = filtTrimmed.split(':');
+                  const filtValue = filtValueParts.join(':').trim();
+                  filter[filtKey.trim()] = 
+                    filtValue === 'null' ? null : 
+                    filtValue === 'true' ? true : 
+                    filtValue === 'false' ? false : filtValue;
+                }
+              }
+              if (Object.keys(filter).length > 0) {
+                config.source_filters.push(filter);
+              }
+            } else if (currentArray === 'destination_filters' && key.startsWith('-')) {
+              // Handle destination filters array items
+              const filter: any = {};
+              const filterLines = lines.slice(lines.indexOf(line));
+              for (const filtLine of filterLines) {
+                const filtTrimmed = filtLine.trim();
+                if (filtTrimmed.startsWith('-') || filtTrimmed === '') continue;
+                if (filtTrimmed.includes(':')) {
+                  const [filtKey, ...filtValueParts] = filtTrimmed.split(':');
+                  const filtValue = filtValueParts.join(':').trim();
+                  filter[filtKey.trim()] = 
+                    filtValue === 'null' ? null : 
+                    filtValue === 'true' ? true : 
+                    filtValue === 'false' ? false : filtValue;
+                }
+              }
+              if (Object.keys(filter).length > 0) {
+                config.destination_filters.push(filter);
+              }
+            } else if (currentArray === 'joins' && key.startsWith('-')) {
+              // Handle joins array items
+              const join: any = {};
+              const joinLines = lines.slice(lines.indexOf(line));
+              for (const joinLine of joinLines) {
+                const joinTrimmed = joinLine.trim();
+                if (joinTrimmed.startsWith('-') || joinTrimmed === '') continue;
+                if (joinTrimmed.includes(':')) {
+                  const [joinKey, ...joinValueParts] = joinLine.split(':');
+                  const joinValue = joinValueParts.join(':').trim();
+                  join[joinKey.trim()] = joinValue;
+                }
+              }
+              if (Object.keys(join).length > 0) {
+                config.joins.push(join);
+              }
             } else if (currentSection === 'enrichment' && key === 'enabled') {
               config.enrichment.enabled = value === 'true';
             } else if (currentSection === 'enrichment' && key === 'transformations') {
@@ -243,6 +380,7 @@ partition_step: ${config.partition_step || 'null'}`;
   useEffect(() => {
     if (config) {
       console.log('DDLGenerationStep: enrichmentTransformations prop:', enrichmentTransformations);
+      console.log('DDLGenerationStep: original config:', config);
       
       // Update destination provider with collected information
       const updatedConfig = {
@@ -265,7 +403,11 @@ partition_step: ${config.partition_step || 'null'}`;
         enrichment: {
           enabled: enrichmentTransformations.length > 0,
           transformations: enrichmentTransformations
-        }
+        },
+        // Ensure filters and joins are preserved and initialized
+        source_filters: config.source_filters || [],
+        destination_filters: config.destination_filters || [],
+        joins: config.joins || []
       };
 
       console.log('DDLGenerationStep: updatedConfig.enrichment:', updatedConfig.enrichment);

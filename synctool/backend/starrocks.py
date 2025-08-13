@@ -12,7 +12,7 @@ from synctool.utils.sql_builder import SqlBuilder
 from .base_backend import SqlBackend
 from ..core.models import Partition
 from ..core.column_mapper import ColumnSchema
-from .base_backend import UniversalSchema, UniversalColumn, UniversalDataType
+from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +292,7 @@ class StarRocksBackend(SqlBackend):
         partition_column = metadata.partition_column
         partition_column_type = metadata.partition_column_type
 
-        if partition_column_type == "int":
+        if partition_column_type == UniversalDataType.INTEGER:
             parts = []
             for idx in range(level + 1):
                 if idx == 0:
@@ -301,7 +301,7 @@ class StarRocksBackend(SqlBackend):
                     prev = intervals[idx - 1]
                     parts.append(f"CAST(({partition_column} % {prev}) / {intervals[idx]} AS VARCHAR)")
             return " || '-' || ".join(parts)
-        elif partition_column_type == "datetime":
+        elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             parts = []
             for idx in range(level + 1):
                 if idx == 0:

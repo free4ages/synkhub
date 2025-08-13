@@ -12,7 +12,7 @@ from synctool.utils.sql_builder import SqlBuilder
 from .base_backend import SqlBackend
 from ..core.models import Partition
 from ..core.column_mapper import ColumnSchema
-from .base_backend import UniversalSchema, UniversalColumn, UniversalDataType
+from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class ClickHouseBackend(SqlBackend):
         partition_column = metadata.partition_column
         partition_column_type = metadata.partition_column_type
 
-        if partition_column_type == "int":
+        if partition_column_type == "integer":
             segments = []
             for idx in range(level + 1):
                 if idx == 0:
@@ -376,7 +376,7 @@ class ClickHouseBackend(SqlBackend):
         grp_field = Field(expr="partition_id", type="column")
 
         filters = []
-        if partition_column_type in ("datetime", "int", "str"):
+        if partition_column_type in ("datetime", "integer", "string"):
             filters += [
                 Filter(column=partition_column, operator=">=", value=start),
                 Filter(column=partition_column, operator="<", value=end)

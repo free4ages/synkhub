@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Any, Union, Tuple, Callable
 from datetime import datetime
 from .enums import HashAlgo, SyncStrategy, PartitionType, BackendType
-
+from .schema_models import UniversalDataType
+from ..utils.schema_utils import cast_value
 
 @dataclass
 class ConnectionConfig:
@@ -68,19 +69,22 @@ class StrategyConfig:
     type: SyncStrategy
     enabled: bool = True
     column: str = ""
+    column_type: Optional[str] = None
     sub_partition_step: int = 100
     interval_reduction_factor: int = 2
     intervals: List[int] = field(default_factory=list)
     prevent_update_unless_changed: bool = True
+    use_pagination: bool = False
     page_size: int = 1000
     cron: Optional[str] = None  # Cron expression for scheduling
 
 @dataclass
 class TransformationConfig:
     """Transformation configuration"""
+    transform: str
+    dest: str
+    dtype: Optional[str] = None
     columns: Optional[List[str]] = field(default_factory=list)
-    transform: Optional[str] = None
-    dest: Optional[str] = None
 
 
 @dataclass
@@ -89,6 +93,7 @@ class DimensionFieldConfig:
     source: str
     dest: str
     transform: Optional[str] = None
+    dtype: Optional[UniversalDataType] = None
 
 
 @dataclass
@@ -197,6 +202,7 @@ class SyncJobConfig:
     strategies: List[Dict[str, Any]] = field(default_factory=list)
     enrichment: Optional[Dict[str, Any]] = None
     hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
+    partition_prefix_length: int = 2
 
     # Concurrency settings
     max_concurrent_partitions: int = 4
@@ -208,7 +214,7 @@ class SyncJobConfig:
 class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
-    dtype: Optional[str] = None
+    dtype: Optional[UniversalDataType] = None
     roles: List[str] = field(default_factory=list)
     insert: bool = True
     expr_map: Optional[Dict[str, str|None]] = None
@@ -229,6 +235,14 @@ class Column:
     def has_role(self, role_name: str) -> bool:
         """Checks if this column has a role (prefix match)."""
         return any(r.startswith(role_name) for r in self.roles)
+    
+    def is_enriched_column(self) -> bool:
+        return self.has_role("enriched_key")
+    
+    def cast(self, value: Any) -> Any:
+        if not self.dtype:
+            return value
+        return cast_value(value, self.dtype)
 
 
 @dataclass

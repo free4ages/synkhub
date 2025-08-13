@@ -2,10 +2,12 @@ from synctool.core.enums import DataStatus
 import asyncio
 from dataclasses import dataclass
 import math
+import itertools
+import uuid
 from typing import List, Any, Optional, Tuple       
 from datetime import datetime, timedelta
 from ..core.models import StrategyConfig, Partition
-
+from ..core.schema_models import UniversalDataType
 @dataclass
 class PartitionConfig:
     """Partition configuration"""
@@ -23,6 +25,29 @@ def add_exclusive_range(value):
     if isinstance(value, datetime):
         return value + timedelta(seconds=1)
     return value
+
+def generate_uuid_prefixes(start: str, end: str, length: int) -> List[str]:
+    uuid_chars = [chr(i) for i in range(ord('0'), ord('9')+1)] + [chr(i) for i in range(ord('a'), ord('f')+1)]
+    #generate all possible combinations from uuid_chars of length length
+    prefixes = [''.join(p) for p in itertools.product(uuid_chars, repeat=length)]
+    return prefixes
+
+
+def hex_to_int(hexstr: str) -> int:
+    """Convert a hex string (0-9a-f) to an integer."""
+    if not all(c in "0123456789abcdef" for c in hexstr.lower()):
+        raise ValueError(f"Invalid hex string: {hexstr}")
+    return int(hexstr, 16)
+
+
+def int_to_hex(num: int, pad_len: int = None) -> str:
+    """Convert an integer to a hex string (lowercase), optionally zero-padded."""
+    if num < 0:
+        raise ValueError("Negative numbers not supported")
+    hexstr = format(num, "x")  # lowercase hex
+    if pad_len is not None:
+        hexstr = hexstr.rjust(pad_len, "0")
+    return hexstr
 
 
 def to_partitions(
@@ -42,7 +67,7 @@ def to_partitions(
         for index, part_num in enumerate(parts):
             partition_start += part_num*intervals[index]
         partition_end = partition_start+intervals[level]
-        if column_type == "datetime":
+        if column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             # Convert timestamps to datetime objects with the same timezone awareness as start/end
             if getattr(start, 'tzinfo', None) is not None:
                 # If start is timezone-aware, create timezone-aware datetimes
@@ -57,7 +82,7 @@ def to_partitions(
             
             partition_start = max(partition_start_dt, start)
             partition_end = min(partition_end_dt, end)
-        elif column_type == "int":
+        elif column_type == UniversalDataType.INTEGER:
             partition_start = max(partition_start, start)
             partition_end = min(partition_end,end)
         partition: Partition = Partition(
@@ -136,15 +161,18 @@ class PartitionGenerator:
         """Generate partition bounds between start and end"""
         partitions = []
         
-        if self.config.column_type == "int":
+        if self.config.column_type == UniversalDataType.INTEGER:
             partitions: list[Partition] = await self._generate_int_partitions(start, end, parent_partition)
-        elif self.config.column_type == "datetime":
+        elif self.config.column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             partitions = await self._generate_datetime_partitions(start, end, parent_partition)
+        elif self.config.column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+            partitions = await self._generate_uuid_partitions(start, end, column_type = self.config.column_type, parent_partition=parent_partition)
         
         return partitions
     
     async def _generate_int_partitions(self, start: int, end: int, parent_partition: Optional[Partition] = None) -> List[Partition]:
         """Generate integer-based partitions"""
+        parent_partition_id = parent_partition.partition_id if parent_partition else None
         partitions = []
         current = start
         partition_id = 0
@@ -157,7 +185,7 @@ class PartitionGenerator:
                 column=self.config.column,
                 column_type=self.config.column_type,
                 partition_step=self.config.partition_step,
-                partition_id=self.config.name.format(pid=partition_id),
+                partition_id=f"{parent_partition_id}-{partition_id}" if parent_partition_id else f"{partition_id}",
                 parent_partition=parent_partition
             ))
             current = partition_end
@@ -170,6 +198,7 @@ class PartitionGenerator:
         """Generate datetime-based partitions"""
         partitions = []
         current = start
+        parent_partition_id = parent_partition.partition_id if parent_partition else None
         partition_id = 0
         start_timestamp = math.floor(start.timestamp())
         end_timestamp = math.ceil(end.timestamp())
@@ -185,8 +214,61 @@ class PartitionGenerator:
                 column=self.config.column,
                 column_type=self.config.column_type,
                 partition_step=self.config.partition_step,
-                partition_id=self.config.name.format(pid=partition_id),
+                partition_id=f"{parent_partition_id}-{partition_id}" if parent_partition_id else f"{partition_id}",
                 parent_partition=parent_partition
             ))
             cur = cur1
+            partition_id += 1
         return partitions
+    
+    async def _generate_uuid_partitions(self, start: uuid.UUID, end: uuid.UUID, column_type: UniversalDataType, parent_partition: Optional[Partition] = None) -> List[Partition]:
+        """Generate uuid-based partitions"""
+        prefix_length = 8
+        partitions = []
+        parent_partition_id = parent_partition.partition_id if parent_partition else None
+        partition_id = 0
+        start_int = hex_to_int(str(start)[:prefix_length])
+        end_int = hex_to_int(str(end)[:prefix_length])
+        initial_partition_interval = self.config.partition_step
+        cur = start_int
+        while cur<end_int:
+            cur1: int = ((cur+initial_partition_interval)//initial_partition_interval)*initial_partition_interval
+            k1: str = int_to_hex(cur, pad_len=prefix_length)+"000000000000000000000000"
+            k2: str = int_to_hex(min(cur1, end_int), pad_len=prefix_length)+"ffffffffffffffffffffffff"
+            if column_type == UniversalDataType.UUID_TEXT_DASH:
+                s1 = str(uuid.UUID(k1))
+                e1 = str(uuid.UUID(k2))
+            elif column_type == UniversalDataType.UUID_TEXT:
+                s1 = k1
+                e1 = k2
+            elif column_type == UniversalDataType.UUID:
+                s1 = uuid.UUID(k1)
+                e1 = uuid.UUID(k2)
+            partitions.append(Partition(
+                start=s1,
+                end=e1,
+                column=self.config.column,
+                column_type=self.config.column_type,
+                partition_step=self.config.partition_step,
+                partition_id=f"{parent_partition_id}-{partition_id}" if parent_partition_id else f"{partition_id}",
+                parent_partition=parent_partition
+            ))
+            cur = cur1
+            partition_id += 1
+        return partitions
+        # genrate all boundary points for uuid using first 2 characters and club them into partitions using self.config.partition_step
+        # partitions = []
+        # prefixes = generate_uuid_prefixes(str(start)[0:2], str(end)[0:2], length=prefix_length)
+        # for i in range(0, len(prefixes), self.config.partition_step):
+        #     start_uuid = prefixes[i]+"000000-0000-0000-0000-000000000000"
+        #     end_uuid = prefixes[min(i+self.config.partition_step-1, len(prefixes)-1)]+"ffffff-ffff-ffff-ffff-ffffffffffff")
+        #     partitions.append(Partition(
+        #         start=start_uuid,
+        #         end=end_uuid,
+        #         column=self.config.column,
+        #         column_type=self.config.column_type,
+        #         partition_step=self.config.partition_step,
+        #         partition_id=self.config.name.format(pid=prefixes[i]),
+        #         parent_partition=parent_partition
+        #     ))
+        # return partitions

@@ -4,8 +4,8 @@ import logging
 import boto3
 from io import StringIO
 
-from ..core import BackendType, ConnectionConfig
-from .base import Provider
+from ..core.models import BackendType, ConnectionConfig
+from .base_backend import Backend
 
 
 class S3Provider(Provider):

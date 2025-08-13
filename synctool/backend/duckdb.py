@@ -2,7 +2,7 @@ import pandas as pd
 from typing import Optional, Dict
 from .base_backend import Backend
 from ..core.models import BackendConfig
-
+from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 class DuckDBBackend(Backend):
     """DuckDB implementation of Backend with S3 backend support"""

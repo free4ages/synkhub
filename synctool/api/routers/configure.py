@@ -67,6 +67,7 @@ class MigrationConfig(BaseModel):
     source_filters: Optional[List[FilterCondition]] = None
     destination_filters: Optional[List[FilterCondition]] = None
     joins: Optional[List[JoinCondition]] = None
+    strategies: Optional[List[Dict[str, Any]]] = None
     enrichment: Optional[Dict[str, Any]] = None
 
 class DDLGenerationRequest(BaseModel):
@@ -308,8 +309,29 @@ async def validate_config(config: MigrationConfig):
         if not has_unique_key:
             errors.append("At least one unique key is required for sync operations")
         
+        # Check for required key configuration
+        if not config.partition_key:
+            errors.append("Partition key is required")
+        
+        if not config.partition_step:
+            errors.append("Partition step is required")
+        
         if config.partition_key and not any(col.name == config.partition_key for col in config.column_map):
             errors.append(f"Partition key '{config.partition_key}' not found in column map")
+        
+        # Validate strategies if present
+        if config.strategies:
+            # Check that only one strategy of each type is enabled
+            enabled_strategies = [s for s in config.strategies if s.get('enabled')]
+            enabled_types = [s.get('type') for s in enabled_strategies]
+            duplicate_enabled_types = [t for t in set(enabled_types) if enabled_types.count(t) > 1]
+            
+            if duplicate_enabled_types:
+                errors.append(f"Multiple strategies of the same type cannot be enabled simultaneously: {', '.join(str(t) for t in duplicate_enabled_types)}")
+            
+            for i, strategy in enumerate(config.strategies):
+                if strategy.get('enabled') and strategy.get('column') and not any(col.name == strategy['column'] for col in config.column_map):
+                    errors.append(f"Strategy '{strategy.get('name', f'Strategy {i+1}')}' column '{strategy['column']}' not found in column map")
         
         # Validate joins if multiple tables are involved
         if config.joins and len(config.joins) > 0:
@@ -428,8 +450,10 @@ async def validate_config(config: MigrationConfig):
 def _generate_suggested_config_from_columns(universal_schema, selected_columns: List[Dict]) -> Dict[str, Any]:
     """Generate suggested configuration based on selected columns"""
     column_map = []
-    
+    primary_key = None
     for col_data in selected_columns:
+        if col_data['primary_key']:
+            primary_key = col_data['name']
         column_mapping = {
             'name': col_data['name'],
             'src': col_data['table_alias'] + '.' + col_data['name'] if col_data.get('table_alias') else col_data['name'],
@@ -494,6 +518,44 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
         'source_filters': [],
         'destination_filters': [],
         'joins': None,
+        'strategies':[
+            {
+                'name': 'delta',
+                'enabled': False,
+                'type': 'delta',
+                'column': None,
+                'sub_partition_step': 30*60,
+                'interval_reduction_factor': 2,
+                'intervals': [],
+                'prevent_update_unless_changed': True,
+                'page_size': 1000,
+                'cron': None
+            },
+            {
+                'name': 'hash',
+                'type': 'hash',
+                'enabled': True,
+                'column': primary_key,
+                'sub_partition_step': 4000,
+                'interval_reduction_factor': 2,
+                'intervals': [],
+                'prevent_update_unless_changed': True,
+                'page_size': 1000,
+                'cron': None
+            },
+            {
+                'name': 'full', 
+                'type': 'full',
+                'enabled': True,
+                'column': primary_key,
+                'sub_partition_step': 5000,
+                'interval_reduction_factor': 2,
+                'intervals': [],
+                'prevent_update_unless_changed': True,
+                'page_size': 5000,
+                'cron': None
+            }
+        ],
         'enrichment': {
             'enabled': False,
             'transformations': [

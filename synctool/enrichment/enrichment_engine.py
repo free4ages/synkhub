@@ -40,6 +40,25 @@ class EnrichmentEngine:
         self.init_lock = Lock()
         self.source_cache_lock = Lock()
     
+    def get_enriched_column_details(self):
+        enriched_columns = []
+        for transformation in self.transformations:
+            column_details = {
+                "dest": transformation.dest
+            }
+            if transformation.dtype:
+                column_details["dtype"] = transformation.dtype
+            enriched_columns.append(column_details)
+        for dim in self.dimensions:
+            for field in dim.fields:
+                column_details = {
+                    "dest": field.dest
+                }
+                if field.dtype:
+                    column_details["dtype"] = field.dtype
+                enriched_columns.append(column_details)
+        return enriched_columns
+    
     def get_enriched_keys(self):
         keys = set()
         for transformation in self.transformations:
@@ -88,9 +107,10 @@ class EnrichmentEngine:
                 await source.disconnect()
 
     async def enrich(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        await self.transform_data(data)
+        
         for dim in self.dimensions:
             await self._enrich_with_dimension(data, dim)
+        await self.transform_data(data)
 
         return data
     
