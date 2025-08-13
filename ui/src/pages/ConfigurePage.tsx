@@ -17,7 +17,7 @@ import { ConnectionStep } from '../components/configure/ConnectionStep';
 import { SchemaExtractionStep } from '../components/configure/SchemaExtractionStep';
 import { ConfigurationStep } from '../components/configure/ConfigurationStep';
 import { EnrichmentStep } from '../components/configure/EnrichmentStep';
-import { ConfigEditorStep } from '../components/configure/ConfigEditorStep';
+import { DestinationStep } from '../components/configure/DestinationStep';
 import { DDLGenerationStep } from '../components/configure/DDLGenerationStep';
 
 const steps: StepperStep[] = [
@@ -42,14 +42,14 @@ const steps: StepperStep[] = [
     description: 'Define transformations'
   },
   {
-    id: 'config-editor',
-    title: 'Edit Config',
-    description: 'Edit YAML/JSON config'
+    id: 'destination',
+    title: 'Destination',
+    description: 'Configure destination database'
   },
   {
     id: 'ddl',
     title: 'Generate DDL',
-    description: 'Create destination table'
+    description: 'Edit config and generate DDL'
   }
 ];
 
@@ -72,12 +72,13 @@ export const ConfigurePage: React.FC = () => {
   // Step 4: Enrichment
   const [enrichmentTransformations, setEnrichmentTransformations] = useState<EnrichmentTransformation[]>([]);
   
-  // Step 5: Config Editor
-  const [editedConfig, setEditedConfig] = useState<MigrationConfig | null>(null);
-  const [configEditorMode, setConfigEditorMode] = useState<'yaml' | 'json'>('yaml');
+  // Step 5: Destination
+  const [destinationConnection, setDestinationConnection] = useState<DatabaseConnection | null>(null);
+  const [destinationTableName, setDestinationTableName] = useState('');
+  const [destinationSchema, setDestinationSchema] = useState('');
   
   // Step 6: DDL
-  const [destinationConnection, setDestinationConnection] = useState<DatabaseConnection | null>(null);
+  const [editedConfig, setEditedConfig] = useState<MigrationConfig | null>(null);
   const [generatedDDL, setGeneratedDDL] = useState('');
   const [configYaml, setConfigYaml] = useState('');
   const [configJson, setConfigJson] = useState('');
@@ -127,27 +128,12 @@ export const ConfigurePage: React.FC = () => {
       // Enrichment step - optional, can proceed without transformations
       setCurrentStep(4);
     } else if (currentStep === 4) {
-      // Validate config editor step
-      if (!editedConfig) {
-        alert('Please edit the configuration');
+      // Validate destination step
+      if (!destinationConnection || !destinationTableName) {
+        alert('Please configure destination connection and table name');
         return;
       }
-      
-      // Validate config
-      setIsLoading(true);
-      try {
-        const validation = await configureApi.validateConfig(editedConfig);
-        if (!validation.valid) {
-          alert(`Configuration validation failed:\n${validation.errors.join('\n')}`);
-          return;
-        }
-        setCurrentStep(5);
-      } catch (error) {
-        console.error('Config validation failed:', error);
-        alert('Failed to validate configuration');
-      } finally {
-        setIsLoading(false);
-      }
+      setCurrentStep(5);
     }
   };
 
@@ -156,8 +142,8 @@ export const ConfigurePage: React.FC = () => {
   };
 
   const handleComplete = async () => {
-    if (!editedConfig || !destinationConnection) {
-      alert('Please configure destination connection');
+    if (!editedConfig || !destinationConnection || !destinationTableName) {
+      alert('Please configure destination connection, table name, and edit configuration');
       return;
     }
 
@@ -204,9 +190,9 @@ export const ConfigurePage: React.FC = () => {
       case 3:
         return true; // Enrichment is optional
       case 4:
-        return !!editedConfig;
+        return !!(destinationConnection && destinationTableName);
       case 5:
-        return !!(editedConfig && destinationConnection);
+        return !!editedConfig;
       default:
         return false;
     }
@@ -256,18 +242,24 @@ export const ConfigurePage: React.FC = () => {
         );
       case 4:
         return (
-          <ConfigEditorStep
-            config={migrationConfig}
-            onConfigChange={setEditedConfig}
-            mode={configEditorMode}
-            onModeChange={setConfigEditorMode}
+          <DestinationStep
+            destinationConnection={destinationConnection}
+            onDestinationConnectionChange={setDestinationConnection}
+            destinationTableName={destinationTableName}
+            onDestinationTableNameChange={setDestinationTableName}
+            destinationSchema={destinationSchema}
+            onDestinationSchemaChange={setDestinationSchema}
           />
         );
       case 5:
         return (
           <DDLGenerationStep
+            config={migrationConfig}
+            onConfigChange={setEditedConfig}
             destinationConnection={destinationConnection}
-            onDestinationConnectionChange={setDestinationConnection}
+            destinationTableName={destinationTableName}
+            destinationSchema={destinationSchema}
+            enrichmentTransformations={enrichmentTransformations}
             generatedDDL={generatedDDL}
             configYaml={configYaml}
             configJson={configJson}

@@ -222,20 +222,21 @@ export const ConnectionStep: React.FC<ConnectionStepProps> = ({
               />
             </div>
 
-            {(sourceConnection?.type === 'postgres' || sourceConnection?.type === 'mysql') && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Schema (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={sourceConnection?.db_schema || ''}
-                  onChange={(e) => handleConnectionChange('db_schema', e.target.value)}
-                  placeholder="public"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Schema (Optional)
+              </label>
+              <input
+                type="text"
+                value={sourceConnection?.db_schema || ''}
+                onChange={(e) => handleConnectionChange('db_schema', e.target.value)}
+                placeholder="public"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Database schema name (e.g., public, dbo, default). Leave empty to use default schema.
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>

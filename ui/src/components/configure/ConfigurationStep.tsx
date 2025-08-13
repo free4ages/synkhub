@@ -5,7 +5,8 @@ import {
   ColumnMapping, 
   FilterCondition, 
   JoinCondition,
-  ColumnInfo 
+  ColumnInfo,
+  StrategyConfig
 } from '../../types/configure';
 
 interface ConfigurationStepProps {
@@ -21,9 +22,79 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
   schema,
   availableColumns
 }) => {
-  const [activeSection, setActiveSection] = useState<'mapping' | 'source-filters' | 'dest-filters' | 'joins'>('mapping');
+  const [activeSection, setActiveSection] = useState<'mapping' | 'strategy' | 'source-filters' | 'dest-filters' | 'joins'>('mapping');
 
   if (!config) return <div>No configuration available</div>;
+
+  // Get available column names for dropdowns
+  const getAvailableColumnNames = () => {
+    return config.column_map.map(col => col.name).filter(Boolean);
+  };
+
+  const handleKeyConfigChange = (field: 'partition_key' | 'partition_step', value: any) => {
+    onConfigChange({
+      ...config,
+      [field]: value
+    });
+  };
+
+  const handleStrategyChange = (index: number, field: string, value: any) => {
+    const updatedStrategies = [...(config.strategies || [])];
+    updatedStrategies[index] = { ...updatedStrategies[index], [field]: value };
+    
+    // Ensure only one strategy of each type is enabled
+    if (field === 'enabled' && value === true) {
+      const strategyType = updatedStrategies[index].type;
+      updatedStrategies.forEach((strategy, i) => {
+        if (i !== index && strategy.type === strategyType && strategy.enabled) {
+          strategy.enabled = false;
+        }
+      });
+    }
+    
+    onConfigChange({
+      ...config,
+      strategies: updatedStrategies
+    });
+  };
+
+  const handleAddStrategy = () => {
+    const availableTypes: ('delta' | 'hash' | 'full')[] = ['delta', 'hash', 'full'];
+    const existingTypes = (config.strategies || []).map(s => s.type);
+    const newType = availableTypes.find(type => !existingTypes.includes(type));
+    
+    if (!newType) {
+      alert('All strategy types are already added. You can have multiple strategies of the same type, but only one can be enabled.');
+      return;
+    }
+    
+    const newStrategy: StrategyConfig = {
+      name: newType,
+      type: newType,
+      enabled: false,
+      column: '',
+      sub_partition_step: newType === 'delta' ? 30*60 : newType === 'hash' ? 4000 : 5000,
+      interval_reduction_factor: 2,
+      intervals: [],
+      prevent_update_unless_changed: true,
+      page_size: newType === 'full' ? 5000 : 1000,
+      cron: undefined
+    };
+    
+    const currentStrategies = config.strategies || [];
+    onConfigChange({
+      ...config,
+      strategies: [...currentStrategies, newStrategy]
+    });
+  };
+
+  const handleRemoveStrategy = (index: number) => {
+    const updatedStrategies = (config.strategies || []).filter((_, i) => i !== index);
+    onConfigChange({
+      ...config,
+      strategies: updatedStrategies
+    });
+  };
 
   const handleColumnMappingChange = (index: number, field: keyof ColumnMapping, value: any) => {
     const updatedColumnMap = [...config.column_map];
@@ -581,6 +652,228 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
     </div>
   );
 
+  const renderStrategySection = () => (
+    <div className="space-y-6">
+      {/* Section 1: Key Configuration */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">Key Configuration</h3>
+        
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Partition Key <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={config.partition_key || ''}
+              onChange={(e) => handleKeyConfigChange('partition_key', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            >
+              <option value="">Select partition key</option>
+              {getAvailableColumnNames().map(col => (
+                <option key={col} value={col}>{col}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Column used for partitioning data during sync
+            </p>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Partition Step <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              value={config.partition_step || ''}
+              onChange={(e) => handleKeyConfigChange('partition_step', parseInt(e.target.value) || 0)}
+              placeholder="1000"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Number of records per partition
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 2: Strategy Configuration */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">Strategy Configuration</h3>
+        
+        <div className="space-y-4">
+          {(config.strategies || []).map((strategy, index) => (
+            <div key={index} className="border border-gray-200 rounded-md p-4">
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="font-medium">{strategy.name} Strategy</h4>
+                <div className="flex items-center space-x-2">
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={strategy.enabled}
+                      onChange={(e) => handleStrategyChange(index, 'enabled', e.target.checked)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="ml-2 text-sm">Enabled</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveStrategy(index)}
+                    className="px-3 py-2 text-red-600 hover:text-red-800 text-sm rounded-md"
+                  >
+                    Remove Strategy
+                  </button>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Type
+                  </label>
+                  <input
+                    type="text"
+                    value={strategy.type}
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-gray-600"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Column
+                  </label>
+                  <select
+                    value={strategy.column || ''}
+                    onChange={(e) => handleStrategyChange(index, 'column', e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select column</option>
+                    {getAvailableColumnNames().map(col => (
+                      <option key={col} value={col}>{col}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Sub Partition Step
+                  </label>
+                  <input
+                    type="number"
+                    value={strategy.sub_partition_step || ''}
+                    onChange={(e) => handleStrategyChange(index, 'sub_partition_step', parseInt(e.target.value) || 0)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              
+              {/* Page Size for all strategies */}
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Page Size
+                </label>
+                <input
+                  type="number"
+                  value={strategy.page_size || ''}
+                  onChange={(e) => handleStrategyChange(index, 'page_size', parseInt(e.target.value) || 0)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Number of records per page for data processing
+                </p>
+              </div>
+              
+              {/* Hash Strategy Specific Fields */}
+              {strategy.type === 'hash' && (
+                <div className="mt-4 space-y-4">
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+                    <p className="text-sm text-blue-800 font-medium mb-2">Hash Strategy Specific Fields:</p>
+                    <p className="text-xs text-blue-700">The following fields are only applicable to hash strategy</p>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Interval Reduction Factor
+                      </label>
+                      <input
+                        type="number"
+                        value={strategy.interval_reduction_factor || ''}
+                        onChange={(e) => handleStrategyChange(index, 'interval_reduction_factor', parseInt(e.target.value) || 0)}
+                        placeholder="2"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Factor to reduce intervals
+                      </p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Intervals
+                      </label>
+                      <input
+                        type="text"
+                        value={strategy.intervals?.join(', ') || ''}
+                        onChange={(e) => {
+                          const intervals = e.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                          handleStrategyChange(index, 'intervals', intervals);
+                        }}
+                        placeholder="100, 200, 500"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Comma-separated interval values
+                      </p>
+                    </div>
+                    
+                    <div className="flex items-center">
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={strategy.prevent_update_unless_changed || false}
+                          onChange={(e) => handleStrategyChange(index, 'prevent_update_unless_changed', e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="ml-2 text-sm">Prevent Update Unless Changed</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Cron Expression for all strategies */}
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Cron Expression (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={strategy.cron || ''}
+                  onChange={(e) => handleStrategyChange(index, 'cron', e.target.value)}
+                  placeholder="0 0 * * *"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Cron expression for scheduling (e.g., "0 0 * * *" for daily at midnight)
+                </p>
+              </div>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleAddStrategy}
+            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+          >
+            Add New Strategy
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       {/* Section Navigation */}
@@ -599,6 +892,16 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
               }`}
             >
               Column Mapping
+            </button>
+            <button
+              onClick={() => setActiveSection('strategy')}
+              className={`px-4 py-2 rounded-md ${
+                activeSection === 'strategy'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+            >
+              Strategy Configuration
             </button>
             <button
               onClick={() => setActiveSection('source-filters')}
@@ -635,6 +938,7 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
           {/* Section Content */}
           <div className="mt-6">
             {activeSection === 'mapping' && renderColumnMappingSection()}
+            {activeSection === 'strategy' && renderStrategySection()}
             {activeSection === 'source-filters' && renderSourceFiltersSection()}
             {activeSection === 'dest-filters' && renderDestFiltersSection()}
             {activeSection === 'joins' && renderJoinsSection()}
@@ -656,10 +960,13 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
             <div className="mt-2 text-sm text-yellow-700">
               <ul className="list-disc list-inside space-y-1">
                 <li><strong>Column Mapping:</strong> Map source columns to destination columns with sync properties</li>
+                <li><strong>Strategy Configuration:</strong> Configure partition key, partition step, and sync strategies</li>
                 <li><strong>Source Filters:</strong> Apply filters to source data before sync (supports joined tables)</li>
                 <li><strong>Destination Filters:</strong> Apply filters to destination data (only mapped columns available)</li>
                 <li><strong>Join Conditions:</strong> Tables and aliases are automatically populated - you only need to specify join type and condition</li>
                 <li>At least one unique key is required for sync operations</li>
+                <li>Hash strategy includes additional fields: interval reduction factor, intervals, and prevent update unless changed</li>
+                <li>Only one strategy of each type can be enabled at a time</li>
               </ul>
             </div>
           </div>

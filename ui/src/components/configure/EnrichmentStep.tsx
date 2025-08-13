@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { EnrichmentTransformation, ColumnMapping } from '../../types/configure';
 
@@ -23,6 +23,36 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
     dtype: 'varchar'
   });
 
+  // Auto-populate hash_key transformation if not already present
+  React.useEffect(() => {
+    const hasHashKeyTransformation = transformations.some(t => t.dest === 'checksum');
+    if (!hasHashKeyTransformation) {
+      const hashKeyTransformation: EnrichmentTransformation = {
+        columns: ['hash__'],
+        transform: 'lambda x: x["hash__"]',
+        dest: 'checksum',
+        dtype: 'varchar'
+      };
+      
+      const updatedTransformations = [...transformations, hashKeyTransformation];
+      onTransformationsChange(updatedTransformations);
+      
+      // Add to column mappings
+      const newColumnMapping: ColumnMapping = {
+        name: 'checksum',
+        src: undefined, // Enrichment columns have undefined source
+        dest: 'checksum',
+        dtype: 'varchar',
+        unique_key: false,
+        order_key: false,
+        hash_key: true, // This is the hash key
+        insert: true
+      };
+      
+      onColumnMappingsUpdate([newColumnMapping]);
+    }
+  }, []); // Only run once on mount
+
   const handleAddTransformation = () => {
     if (newTransformation.columns.length > 0 && newTransformation.transform && newTransformation.dest) {
       const updatedTransformations = [...transformations, newTransformation];
@@ -31,7 +61,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
       // Add to column mappings
       const newColumnMapping: ColumnMapping = {
         name: newTransformation.dest,
-        src: null, // Enrichment columns have null source
+        src: undefined, // Enrichment columns have undefined source
         dest: newTransformation.dest,
         dtype: newTransformation.dtype,
         unique_key: false,

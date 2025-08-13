@@ -71,6 +71,19 @@ export interface EnrichmentTransformation {
   dtype: string;
 }
 
+export interface StrategyConfig {
+  name: string;
+  type: 'delta' | 'hash' | 'full';
+  enabled: boolean;
+  column?: string;
+  sub_partition_step?: number;
+  interval_reduction_factor?: number;
+  intervals?: number[];
+  prevent_update_unless_changed?: boolean;
+  page_size?: number;
+  cron?: string;
+}
+
 export interface MigrationConfig {
   name: string;
   description: string;
@@ -83,6 +96,7 @@ export interface MigrationConfig {
   source_filters?: FilterCondition[];
   destination_filters?: FilterCondition[];
   joins?: JoinCondition[];
+  strategies?: StrategyConfig[];
   enrichment?: {
     enabled: boolean;
     transformations: EnrichmentTransformation[];
