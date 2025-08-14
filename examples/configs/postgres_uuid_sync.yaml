@@ -80,33 +80,35 @@ column_map:
     dtype: 'text'
 
 partition_key: 'user_id'
-partition_step: 45000000
+partition_step: 90000000 # will create around 50 main partitions
 
 strategies:
   # Delta sync every 15 minutes
   - name: 'delta'
     type: 'delta'
     column: 'updated_at'
-    sub_partition_step: 60*60  # 1 hour
+    sub_partition_step: 3600  # 1 hour
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
-    page_size: 10
+    page_size: 100
+    use_pagination: true
+    use_sub_partitions: false
   
   # Hash sync every 2 hours
   - name: 'hash'
     type: 'hash'
     enabled: true
     column: 'user_id'
-    sub_partition_step: 10
+    sub_partition_step: 9000000 # will create 10 sub partitions in each main partition
     cron: '0 */2 * * *'  # Every 2 hours
-    page_size: 10
+    page_size: 10  
   
   # Full sync daily at 3 AM
   - name: 'full'
     type: 'full'
     enabled: true
     column: 'user_id'
-    sub_partition_step: 4500000
+    sub_partition_step: 9000000 # will create 10 sub partitions in each main partition
     page_size: null
     use_pagination: false
     cron: '0 3 * * *'  # Daily at 3 AM
