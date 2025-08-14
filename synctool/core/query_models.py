@@ -24,6 +24,7 @@ class BlockNameMeta:
     strategy: str
     partition_column_type: str
     intervals: Optional[List[int]]
+    parent_partition_id: Optional[str] = None
 
    
 

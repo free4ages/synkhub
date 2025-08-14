@@ -8,6 +8,10 @@ from typing import List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from ..core.models import StrategyConfig, Partition
 from ..core.schema_models import UniversalDataType
+import logging
+
+logger = logging.getLogger(__name__)
+
 @dataclass
 class PartitionConfig:
     """Partition configuration"""
@@ -49,6 +53,8 @@ def int_to_hex(num: int, pad_len: int = None) -> str:
         hexstr = hexstr.rjust(pad_len, "0")
     return hexstr
 
+END_HEX_INT = hex_to_int(8*"f")
+
 
 def to_partitions(
     partitions_data: List[dict],
@@ -63,6 +69,7 @@ def to_partitions(
     for partition_data in partitions_data:
         partition_id, partition_hash, num_rows = partition_data["partition_id"], partition_data["partition_hash"], partition_data["num_rows"]
         parts: list[int] = [int(x) for x in partition_id.split('-')]
+        assert len(parts) == level+1, f"Partition id {partition_id} has {len(parts)} parts number, expected {level+1}"
         partition_start = 0
         for index, part_num in enumerate(parts):
             partition_start += part_num*intervals[index]
@@ -82,9 +89,28 @@ def to_partitions(
             
             partition_start = max(partition_start_dt, start)
             partition_end = min(partition_end_dt, end)
+
         elif column_type == UniversalDataType.INTEGER:
             partition_start = max(partition_start, start)
             partition_end = min(partition_end,end)
+
+        elif column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+            if partition_end >= END_HEX_INT:
+                partition_end = END_HEX_INT
+            partition_start_str = int_to_hex(partition_start, pad_len=8)
+            partition_end_str = int_to_hex(partition_end, pad_len=8)
+            partition_start = partition_start_str+24*"0"
+            partition_end = partition_end_str+24*"0"
+            # print(partition_start, partition_end)
+            if column_type == UniversalDataType.UUID_TEXT_DASH:
+                partition_start = str(uuid.UUID(partition_start))
+                partition_end = str(uuid.UUID(partition_end))
+            elif column_type == UniversalDataType.UUID_TEXT:
+                partition_start = partition_start_str
+                partition_end = partition_end_str
+            elif column_type == UniversalDataType.UUID:
+                partition_start = uuid.UUID(partition_start)
+                partition_end = uuid.UUID(partition_end)
         partition: Partition = Partition(
             start=partition_start, 
             end=partition_end,
@@ -128,20 +154,23 @@ def calculate_partition_status(src_partitions: List[Partition], snk_partitions: 
     return result, status       
 
 
-def build_intervals(initial_partition_interval: int, max_partition_step: int, interval_reduction_factor: int) -> list[int]:
+def build_intervals(initial_partition_interval: int, min_partition_step: int, interval_reduction_factor: int) -> list[int]:
     intervals: list[int] = []
     interval: int = initial_partition_interval
-    while interval>max_partition_step:
+    while interval>min_partition_step:
         intervals.append(interval)
         interval = interval//interval_reduction_factor
     intervals.append(interval)    
     return intervals
 
-def merge_adjacent(partitions: List[Partition], statuses: List[str], max_partition_step: int) -> Tuple[List[Partition], List[str]]:
+def merge_adjacent(partitions: List[Partition], statuses: List[str], page_size: int) -> Tuple[List[Partition], List[str]]:
     merged_partitions, merged_statuses = [], []
-
-    for c, st in zip(partitions, statuses):
-        if st in ('M', 'A') and merged_partitions and merged_statuses[-1] == st and merged_partitions[-1].num_rows+c.num_rows <= max_partition_step:
+    #sort partitions,statuses by start, end, level
+    zipped = sorted(zip(partitions, statuses), key=lambda x: (x[0].start, x[0].end, x[0].level))
+    # might need to preserve the merged partition in future
+    for c, st in zipped:
+        if st in ('M', 'A') and merged_partitions and merged_statuses[-1] == st and merged_partitions[-1].num_rows+c.num_rows <= page_size:
+            logger.info(f"Merging adjacent partitions {merged_partitions[-1].start}-{merged_partitions[-1].end} and {c.start}-{c.end}")
             prev = merged_partitions[-1]
             prev.end = max(prev.end, c.end)
             prev.num_rows += c.num_rows
@@ -176,6 +205,7 @@ class PartitionGenerator:
         partitions = []
         current = start
         partition_id = 0
+        level = parent_partition.level + 1 if parent_partition else 0
         
         while current < end:
             partition_end = min(((current + self.config.partition_step)//self.config.partition_step)*self.config.partition_step, end)
@@ -186,7 +216,8 @@ class PartitionGenerator:
                 column_type=self.config.column_type,
                 partition_step=self.config.partition_step,
                 partition_id=f"{parent_partition_id}-{partition_id}" if parent_partition_id else f"{partition_id}",
-                parent_partition=parent_partition
+                parent_partition=parent_partition,
+                level=level
             ))
             current = partition_end
             partition_id += 1
@@ -200,6 +231,7 @@ class PartitionGenerator:
         current = start
         parent_partition_id = parent_partition.partition_id if parent_partition else None
         partition_id = 0
+        level = parent_partition.level + 1 if parent_partition else 0
         start_timestamp = math.floor(start.timestamp())
         end_timestamp = math.ceil(end.timestamp())
         initial_partition_interval = self.config.partition_step
@@ -215,26 +247,37 @@ class PartitionGenerator:
                 column_type=self.config.column_type,
                 partition_step=self.config.partition_step,
                 partition_id=f"{parent_partition_id}-{partition_id}" if parent_partition_id else f"{partition_id}",
-                parent_partition=parent_partition
+                parent_partition=parent_partition,
+                level=level
             ))
             cur = cur1
             partition_id += 1
         return partitions
     
-    async def _generate_uuid_partitions(self, start: uuid.UUID, end: uuid.UUID, column_type: UniversalDataType, parent_partition: Optional[Partition] = None) -> List[Partition]:
+    async def _generate_uuid_partitions(self, start: uuid.UUID|str, end: uuid.UUID|str, column_type: UniversalDataType, parent_partition: Optional[Partition] = None) -> List[Partition]:
         """Generate uuid-based partitions"""
+        
         prefix_length = 8
         partitions = []
         parent_partition_id = parent_partition.partition_id if parent_partition else None
+        level = parent_partition.level + 1 if parent_partition else 0
         partition_id = 0
         start_int = hex_to_int(str(start)[:prefix_length])
         end_int = hex_to_int(str(end)[:prefix_length])
         initial_partition_interval = self.config.partition_step
         cur = start_int
+
+        #handle case for last partition. We need to create extra partition for last partition
+        if end_int >= END_HEX_INT:
+            end_int = END_HEX_INT+1
         while cur<end_int:
             cur1: int = ((cur+initial_partition_interval)//initial_partition_interval)*initial_partition_interval
-            k1: str = int_to_hex(cur, pad_len=prefix_length)+"000000000000000000000000"
-            k2: str = int_to_hex(min(cur1, end_int), pad_len=prefix_length)+"ffffffffffffffffffffffff"
+            k1: str = int_to_hex(cur, pad_len=prefix_length)+24*"0"
+            k2: str = int_to_hex(min(cur1, end_int), pad_len=prefix_length)
+            if len(k2) > 8:
+                k2 = 32*"f"
+            else:
+                k2 = k2+24*"0"
             if column_type == UniversalDataType.UUID_TEXT_DASH:
                 s1 = str(uuid.UUID(k1))
                 e1 = str(uuid.UUID(k2))
@@ -251,7 +294,8 @@ class PartitionGenerator:
                 column_type=self.config.column_type,
                 partition_step=self.config.partition_step,
                 partition_id=f"{parent_partition_id}-{partition_id}" if parent_partition_id else f"{partition_id}",
-                parent_partition=parent_partition
+                parent_partition=parent_partition,
+                level=level
             ))
             cur = cur1
             partition_id += 1

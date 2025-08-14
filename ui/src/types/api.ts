@@ -17,7 +17,7 @@ export interface StrategyDetail {
   column: string;
   cron?: string;
   sub_partition_step: number;
-  page_size: number;
+  page_size?: number;
 }
 
 export interface JobDetail {

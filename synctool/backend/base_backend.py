@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import uuid
 import json
 import decimal
+import logging
 
 from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
 from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column
@@ -115,7 +116,7 @@ class BaseBackend(ABC):
 
 
 class Backend(BaseBackend):
-    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None):
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None):
         self.config = config
         self.provider_type = BackendType(config.type)
         self.connection_config = ConnectionConfig(**config.connection) if config.connection else ConnectionConfig()
@@ -131,7 +132,8 @@ class Backend(BaseBackend):
         self.column_schema = column_schema  # New: ColumnSchema instance
         self.backend = config.backend
         self.provider_config = config.config or {}
-        
+        logger_name = f"{logger.name}.backend.{self.config.type}" if logger else f"{__name__}.{self.config.type}"
+        self.logger = logging.getLogger(logger_name)
         self._connection_pool = None
         self._lock = asyncio.Lock()
     
@@ -254,16 +256,11 @@ class SqlBackend(Backend):
             raise ValueError("No partition key configured in column schema")
         partition_column = partition_column or self.column_schema.partition_key.name
         column: Column = self.column_schema.column(partition_column)
-        if column.dtype in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
-            filters.extend([     
-                Filter(column=column.expr, operator=">=", value=cast_value(partition.start, column.dtype)),
-                Filter(column=column.expr, operator="<=", value=cast_value(partition.end, column.dtype))
-            ])
-        else:
-            filters.extend([     
-                Filter(column=column.expr, operator=">=", value=cast_value(partition.start, column.dtype)),
-                Filter(column=column.expr, operator="<", value=cast_value(partition.end, column.dtype))
-            ])
+
+        filters.extend([     
+            Filter(column=column.expr, operator=">=", value=cast_value(partition.start, column.dtype)),
+            Filter(column=column.expr, operator="<", value=cast_value(partition.end, column.dtype))
+        ])
         
         # Add pagination if specified
         limit = page_size if page_size is not None else None

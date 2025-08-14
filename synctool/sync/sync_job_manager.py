@@ -81,7 +81,7 @@ class SyncJobManager:
             self.logger.info(f"Starting sync job: {job_name} with strategy: {strategy_name}")
             
             # Create sync engine with metrics collector
-            sync_engine = SyncEngine(config, metrics_collector)
+            sync_engine = SyncEngine(config, metrics_collector, logger=self.logger)
             
             # Create progress callback wrapper that updates metrics
             def combined_progress_callback(progress: SyncProgress):
@@ -129,7 +129,7 @@ class SyncJobManager:
                 self.logger.error(f"Failed metrics collection for run {run_id}: {e}")
             
             self.logger.error(f"Failed sync job {job_name}:{strategy_name}: {e}")
-            raise
+            raise e
         finally:
             # Ensure logging handler is removed
             if logging_collector:

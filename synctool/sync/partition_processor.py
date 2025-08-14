@@ -9,7 +9,7 @@ from typing import List
 import logging
 import pandas as pd
 from typing import Dict, Any, TYPE_CHECKING
-
+import traceback
 from synctool.core.enums import HashAlgo
 from synctool.utils.partition_generator import PartitionConfig, PartitionGenerator
 from ..core.models import Partition, StrategyConfig, SyncStrategy
@@ -22,12 +22,13 @@ if TYPE_CHECKING:
 class PartitionProcessor:
     """Process individual partitions with specific sync logic"""
     
-    def __init__(self, sync_engine: 'SyncEngine', partition: Partition, strategy: SyncStrategy, strategy_config: StrategyConfig):
+    def __init__(self, sync_engine: 'SyncEngine', partition: Partition, strategy: SyncStrategy, strategy_config: StrategyConfig, logger= None):
         self.sync_engine = sync_engine
         self.partition = partition
         self.strategy = strategy
         self.strategy_config = strategy_config
-        self.logger = logging.getLogger(f"{__name__}")
+        logger_name = f"{logger.name}.partition.{self.partition.partition_id}" if logger else f"{__name__}.partition.{self.partition.partition_id}"
+        self.logger = logging.getLogger(logger_name)
     
     
     async def process(self) -> Dict[str, Any]:
@@ -48,23 +49,29 @@ class PartitionProcessor:
             return result
             
         except Exception as e:
-            self.logger.error(f"Failed processing partition {self.partition.partition_id}: {str(e)}")
-            raise
+            self.logger.error(f"Failed processing partition {self.partition.partition_id}:  {str(e)}\nStacktrace:\n{traceback.format_exc()}")
+            raise e
 
        
     async def _process_full_sync(self) -> Dict[str, Any]:
         """Process full sync for partition with pagination and subpartitioning"""
         rows_inserted = 0
         page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
-        
-        sub_partition_config: PartitionConfig = PartitionConfig(
-            name="sub_partition_{pid}",
-            column=self.partition.column,
-            column_type=self.partition.column_type,
-            partition_step=self.strategy_config.sub_partition_step
-        )
-        sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
-        sub_partitions: list[Partition] = await sub_partition_generator.generate_partitions(self.partition.start, self.partition.end, self.partition)
+
+        if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
+            self.logger.warning("use_sub_partitions and use_pagination are both False, this will be  memory intensive")
+
+        if self.strategy_config.use_sub_partitions:
+            sub_partition_config: PartitionConfig = PartitionConfig(
+                name="sub_partition_{pid}",
+                column=self.partition.column,
+                column_type=self.partition.column_type,
+                partition_step=self.strategy_config.sub_partition_step
+            )
+            sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
+            sub_partitions: list[Partition] = await sub_partition_generator.generate_partitions(self.partition.start, self.partition.end, self.partition)
+        else:
+            sub_partitions = [self.partition]
 
         # check if pagination is needed. it makes extra call without data
         # if parition column is unique, we can skip pagination
@@ -73,15 +80,15 @@ class PartitionProcessor:
         #     unique_keys = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_keys]
         #     if len(unique_keys) == 1 and unique_keys[0] == self.partition.column:
         #         skip_pagination = True
-        
+        current_num = 0
         for sub_partition in sub_partitions:
             # Process subpartition with pagination
-            
+            current_num += 1
             sub_partition_rows = 0
             offset = 0
             
             while True:
-                self.logger.info(f"Processing subpartition {sub_partition.partition_id} from {sub_partition.start} to {sub_partition.end} with page_size {page_size} and offset {offset}")
+                self.logger.info(f"Processing sub partition({current_num}/{len(sub_partitions)}) {sub_partition.partition_id} from {sub_partition.start} to {sub_partition.end} with page_size {page_size} and offset {offset}")
                 # Fetch paginated data from source
                 data: list[dict[str, Any]] = await self.sync_engine.source_provider.fetch_partition_data(
                     sub_partition, 
@@ -110,8 +117,6 @@ class PartitionProcessor:
 
 
                 offset += page_size
-
-
                 
                 # If we got fewer rows than page_size, we've reached the end
                 if len(data) < page_size:
@@ -135,29 +140,39 @@ class PartitionProcessor:
     async def _process_delta_sync(self) -> Dict[str, Any]:
         """Process delta sync for partition with pagination and subpartitioning"""
         rows_inserted = 0
-        page_size = getattr(self.strategy_config, 'page_size', 1000)  # Default to 1000 if not specified
+        page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
+
+        if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
+            self.logger.warning("use_sub_partitions and use_pagination are both False, this will be memory intensive")
         
-        sub_partition_config: PartitionConfig = PartitionConfig(
-            name="sub_partition_{pid}",
-            column=self.partition.column,
-            column_type=self.partition.column_type,
-            partition_step=self.strategy_config.sub_partition_step
-        )
-        sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
-        sub_partitions: list[Partition] = await sub_partition_generator.generate_partitions(self.partition.start, self.partition.end, self.partition)
-        
+        if self.strategy_config.use_sub_partitions:
+            sub_partition_config: PartitionConfig = PartitionConfig(
+                name="sub_partition_{pid}",
+                column=self.partition.column,
+                column_type=self.partition.column_type,
+                partition_step=self.strategy_config.sub_partition_step
+            )
+            sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
+            sub_partitions: list[Partition] = await sub_partition_generator.generate_partitions(self.partition.start, self.partition.end, self.partition)
+        else:
+            sub_partitions = [self.partition]
+        use_pagination = self.strategy_config.use_pagination
+
+        current_num = 0
         for sub_partition in sub_partitions:
             # Process subpartition with pagination
             sub_partition_rows = 0
             offset = 0
             
             while True:
+                current_num += 1
+                self.logger.info(f"Processing sub partition({current_num}/{len(sub_partitions)}) {sub_partition.partition_id} from {sub_partition.start} to {sub_partition.end} with page_size {page_size} and offset {offset}")
                 # Fetch paginated data from source
                 data: list[dict[str, Any]] = await self.sync_engine.source_provider.fetch_delta_data(
                     sub_partition, 
                     hash_algo=self.sync_engine.hash_algo,
-                    page_size=page_size,
-                    offset=offset
+                    page_size=page_size if use_pagination else None,
+                    offset=offset if use_pagination else None
                 )
                 
                 # If no data returned, we've processed all pages for this subpartition
@@ -175,6 +190,9 @@ class PartitionProcessor:
                 
                 sub_partition_rows += r_inserted
                 rows_inserted += r_inserted
+                if not use_pagination:
+                    break
+                
                 offset += page_size
                 
                 # If we got fewer rows than page_size, we've reached the end
@@ -196,16 +214,22 @@ class PartitionProcessor:
     async def _process_hash_sync(self) -> Dict[str, Any]:
         """Process hash-based sync for partition"""
         rows_detected = 0
+        rows_fetched = 0
         rows_inserted = 0
         rows_updated = 0
         rows_deleted = 0
         hash_query_count = 0
         data_query_count = 0
-        self.partition.intervals = build_intervals(self.sync_engine.config.partition_step, self.strategy_config.sub_partition_step, self.strategy_config.interval_reduction_factor)
-        sub_partition_step = self.strategy_config.sub_partition_step
-        partitions, statuses, hash_query_count = await self.calculate_sub_partitions(self.partition, sub_partition_step,  max_level=len(self.partition.intervals)-1, page_size=self.strategy_config.page_size)
+        # import pdb; pdb.set_trace()
+        # if intervals are provided, use them. Otherwise, calculate them based on the min_sub_partition_step and interval_reduction_factor.
+        if self.strategy_config.intervals:
+            self.partition.intervals = self.strategy_config.intervals
+        else:
+            self.partition.intervals = build_intervals(self.sync_engine.config.partition_step, self.strategy_config.min_sub_partition_step, self.strategy_config.interval_reduction_factor)
+        # import pdb; pdb.set_trace()
+        partitions, statuses, hash_query_count = await self.calculate_sub_partitions(self.partition,  max_level=len(self.partition.intervals)-1, page_size=self.strategy_config.page_size)
         
-        partitions, statuses = merge_adjacent(partitions, statuses, sub_partition_step)
+        partitions, statuses = merge_adjacent(partitions, statuses, self.strategy_config.page_size)
         sync_engine = self.sync_engine
 
 
@@ -284,7 +308,6 @@ class PartitionProcessor:
     async def calculate_sub_partitions(
         self,
         partition: Partition,
-        sub_partition_step: int,
         max_level =100,
         page_size: int = 1000
     ) -> Tuple[List[Partition], List[str], int]:
@@ -303,8 +326,8 @@ class PartitionProcessor:
                 # intervals[level] = math.floor(intervals[-1]/interval_reduction_factor)
                 deeper_partitions, deeper_statuses, deeper_hash_query_count = await self.calculate_sub_partitions(
                     p,
-                    sub_partition_step,
-                    max_level
+                    max_level=max_level,
+                    page_size=page_size
                 )
                 hash_query_count += deeper_hash_query_count
                 final_partitions.extend(deeper_partitions)

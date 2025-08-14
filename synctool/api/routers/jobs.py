@@ -90,7 +90,7 @@ async def get_job_detail(
                 column=strategy_dict.get('column', ''),
                 cron=strategy_dict.get('cron'),
                 sub_partition_step=strategy_dict.get('sub_partition_step', 100),
-                page_size=strategy_dict.get('page_size', 1000)
+                page_size=strategy_dict.get('page_size')
             )
             strategy_details.append(strategy_detail)
         

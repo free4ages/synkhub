@@ -10,11 +10,12 @@ logger = logging.getLogger(__name__)
 class Provider:
     """Unified Provider class that wraps data and state backends"""
     
-    def __init__(self, config: Dict[str, Any], data_column_schema=None, state_column_schema=None, role=None):
+    def __init__(self, config: Dict[str, Any], data_column_schema=None, state_column_schema=None, role=None, logger= None):
         data_backend_config = config.get('data_backend', config)
         state_backend_config = config.get('state_backend')
         self.role = role
-        
+        logger_name = f"{logger.name}.{self.role}.provider" if logger else f"{__name__}.{self.role}.provider"
+        self.logger = logging.getLogger(logger_name)
         # Pass column schemas to backends
         self.data_backend = self._create_backend(data_backend_config, data_column_schema)
         self.has_same_backend = True
@@ -25,17 +26,18 @@ class Provider:
             self.state_backend = self._create_backend(state_backend_config, state_column_schema)
         else:
             self.state_backend = self.data_backend
+
     
     def _create_backend(self, config: Dict[str, Any], column_schema=None) -> Backend:
         """Create backend instance with column schema"""
         backend_config = BackendConfig(**config)
         
         if backend_config.type == "postgres":
-            return PostgresBackend(backend_config, column_schema)
+            return PostgresBackend(backend_config, column_schema, logger=self.logger)
         elif backend_config.type == "clickhouse":
-            return ClickHouseBackend(backend_config, column_schema)
+            return ClickHouseBackend(backend_config, column_schema, logger=self.logger)
         elif backend_config.type == "duckdb":
-            return DuckDBBackend(backend_config, column_schema)
+            return DuckDBBackend(backend_config, column_schema, logger=self.logger)
         else:
             raise ValueError(f"Unsupported backend type: {backend_config.type}")
     

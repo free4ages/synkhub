@@ -209,7 +209,7 @@ export const JobDetailPage: React.FC = () => {
                     <div className="text-sm text-gray-600 space-y-1">
                       <div>Column: {strategy.column}</div>
                       <div>Sub-partition step: {strategy.sub_partition_step.toLocaleString()}</div>
-                      <div>Page size: {strategy.page_size.toLocaleString()}</div>
+                      <div>Page size: {strategy.page_size ? strategy.page_size.toLocaleString() : 'Not set'}</div>
                       {strategy.cron && (
                         <div className="flex items-center">
                           <Clock className="h-3 w-3 mr-1" />

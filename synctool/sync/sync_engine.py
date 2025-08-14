@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import logging
+import traceback
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING
@@ -21,7 +22,7 @@ from ..core.schema_models import UniversalDataType
 class SyncEngine:
     """Main sync engine that orchestrates the sync process"""
     
-    def __init__(self, config: SyncJobConfig, metrics_collector: Optional['MetricsCollector'] = None):
+    def __init__(self, config: SyncJobConfig, metrics_collector: Optional['MetricsCollector'] = None, logger= None):
         self.config = config
         self.source_provider: Provider = None
         self.destination_provider: Provider = None
@@ -29,7 +30,8 @@ class SyncEngine:
         self.enrichment_engine: Optional[EnrichmentEngine] = None
         self.hash_calculator = HashCalculator()
         self.progress = SyncProgress()
-        self.logger = logging.getLogger(f"{__name__}.{config.name}")
+        logger_name = f"{logger.name}.engine" if logger else f"{__name__}.engine"
+        self.logger = logging.getLogger(logger_name)
         self.hash_algo = config.hash_algo or HashAlgo.HASH_MD5_HASH
         self.column_mapper: ColumnMapper = None
         self.metrics_collector = metrics_collector
@@ -121,6 +123,16 @@ class SyncEngine:
                     'job_name': self.config.name,
                     'status': 'completed',
                     'total_partitions': 0,
+                    'successful_partitions': 0,
+                    'failed_partitions': 0,
+                    'total_rows_detected': 0,
+                    'total_rows_inserted': 0,
+                    'total_rows_updated': 0,
+                    'total_rows_deleted': 0,
+                    'total_hash_query_count': 0,
+                    'total_data_query_count': 0,
+                    'duration': f"{(datetime.now() - self.progress.start_time).total_seconds()} seconds",
+                    'partition_results': []
                 }
             sync_end = add_exclusive_range(sync_end)
             self.logger.info(f"Sync bounds: {sync_start} to {sync_end}")
@@ -210,9 +222,36 @@ class SyncEngine:
         if self.config.max_concurrent_partitions == 1:
          
             for partition in partitions:
-                processor: PartitionProcessor = PartitionProcessor(self, partition, strategy, strategy_config)
-                result: dict[str, Any] = await processor.process()
-                results.append(result)
+                try:
+                    processor: PartitionProcessor = PartitionProcessor(self, partition, strategy, strategy_config)
+                    result: dict[str, Any] = await processor.process()
+                    results.append(result)
+                    # Update progress to mirror concurrent path
+                    self.progress.update_progress(
+                        rows_detected=result.get('rows_detected', 0),
+                        rows_inserted=result.get('rows_inserted', 0),
+                        rows_updated=result.get('rows_updated', 0),
+                        rows_deleted=result.get('rows_deleted', 0),
+                        hash_query_count=result.get('hash_query_count', 0),
+                        data_query_count=result.get('data_query_count', 0),
+                        completed=True
+                    )
+                    if progress_callback:
+                        progress_callback(self.progress)
+                except Exception as e:
+                    raise e
+                    self.logger.error(f"Partition {partition.partition_id} failed: {str(e)}")
+                    self.progress.update_progress(failed=True)
+                    if progress_callback:
+                        progress_callback(self.progress)
+                    results.append({
+                        'partition_id': partition.partition_id,
+                        'status': 'failed',
+                        'error': str(e),
+                        'rows_processed': 0,
+                        'rows_inserted': 0,
+                        'rows_updated': 0
+                    })
             return results
         
         async def process_partition_with_semaphore(partition: Partition) -> Dict[str, Any]:
@@ -239,7 +278,7 @@ class SyncEngine:
                     return result
                     
                 except Exception as e:
-                    self.logger.error(f"Partition {partition.partition_id} failed: {str(e)}")
+                    self.logger.error(f"Partition {partition.partition_id} failed: {str(e)}\nStacktrace:\n{traceback.format_exc()}")
                     self.progress.update_progress(failed=True)
                     
                     if progress_callback:

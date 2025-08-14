@@ -4,6 +4,8 @@ from typing import Dict, List, Any, Optional
 import yaml
 import json
 # from ..state import get_state  # Not needed for this router
+from ...core.models import UniversalDataType
+from ...core.schema_models import UniversalSchema, UniversalColumn
 
 router = APIRouter(prefix="/api/configure", tags=["configure"])
 
@@ -212,7 +214,7 @@ async def generate_suggested_config(request: GenerateSuggestedConfigRequest):
                 selected_columns.append(col)
         
         # Create a mock universal schema with selected columns
-        from synctool.backend.base_backend import UniversalSchema, UniversalColumn, UniversalDataType
+
         
         columns = []
         for col_data in selected_columns:
@@ -241,6 +243,8 @@ async def generate_suggested_config(request: GenerateSuggestedConfigRequest):
         return config
         
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to generate suggested config: {str(e)}")
 
 @router.post("/generate-ddl")
@@ -289,6 +293,8 @@ async def generate_ddl(request: DDLGenerationRequest):
         }
         
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"DDL generation failed: {str(e)}")
 
 @router.post("/validate-config")
@@ -571,7 +577,7 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
 
 def _config_to_universal_schema(config: MigrationConfig):
     """Convert migration config to UniversalSchema"""
-    from synctool.backend.base_backend import UniversalSchema, UniversalColumn, UniversalDataType
+    # from synctool.backend.base_backend import UniversalSchema, UniversalColumn, UniversalDataType
     
     columns = []
     

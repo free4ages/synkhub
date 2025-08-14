@@ -70,11 +70,28 @@ class StrategyConfig:
     enabled: bool = True
     column: str = ""
     column_type: Optional[str] = None
-    sub_partition_step: int = 100
-    interval_reduction_factor: int = 2
+    # if true, will create sub partitions for each partition. Only available for delta and full strategies.
+    use_sub_partitions: bool = True   
+    # step size for sub partitions. Only available for delta and full strategies.
+    sub_partition_step: int = 100 
+    # minimum step size for sub partitions. Only available for hash strategies.
+    # Main parition will be recursively divided into sub partitions until the step size is less than or equal to min_sub_partition_step or page_size is reached.
+    min_sub_partition_step: int = 10  
+    # factor by which to reduce the step size for sub partitions. Only available for hash strategies.
+    # The block size will recursively reduced by this factor until it is less than or equal to min_sub_partition_step.
+    interval_reduction_factor: int = 2  
+    # Optionally provide a list of intervals to use for the hash strategy.
+    # If not provided, will be automatically calculated based on the min_sub_partition_step and interval_reduction_factor.
+    # If provided, will be used to calculate the sub partitions.
+    # If provided, min_sub_partition_step and interval_reduction_factor will be ignored.
     intervals: List[int] = field(default_factory=list)
     prevent_update_unless_changed: bool = True
+    # if true, will use pagination to fetch data. Only available for delta and full and hash strategies.
     use_pagination: bool = False
+    # page size for pagination. Only available for delta and full and hash strategies.
+    # If use_pagination is true, will fetch data in chunks of page_size.
+    # For delta strategy, will fetch data in chunks of page_size.
+    # Also prevents sub partitions from being created in hash strategy.
     page_size: int = 1000
     cron: Optional[str] = None  # Cron expression for scheduling
 

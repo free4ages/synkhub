@@ -22,7 +22,9 @@ class StrategyDetail(BaseModel):
     column: str
     cron: Optional[str] = None
     sub_partition_step: int
-    page_size: int
+    page_size: Optional[int] = None
+    use_pagination: bool = False
+    use_sub_partitions: bool = True
 
 
 class JobDetail(BaseModel):

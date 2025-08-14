@@ -1,25 +1,27 @@
 import math
 import io
-from synctool.core.models import StrategyConfig
-from synctool.core.models import BackendConfig
-from typing import Any, List, Optional, Dict, Tuple
-from datetime import timedelta
+from datetime import timedelta, datetime
 
-from synctool.core.enums import HashAlgo
-from synctool.core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
-from synctool.utils.sql_builder import SqlBuilder
-from .base_backend import SqlBackend
-from ..core.models import Partition, BackendConfig
+from typing import Any, List, Optional, Dict, Tuple
+
+from ..core.models import StrategyConfig
+from ..core.models import BackendConfig
+from ..core.enums import HashAlgo
+from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
+from ..utils.sql_builder import SqlBuilder
+from ..backend.base_backend import SqlBackend
+from ..core.models import Partition, BackendConfig, Column
 from ..core.column_mapper import ColumnSchema
 from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
+
 
 MAX_PG_PARAMS = 31000
 
 class PostgresBackend(SqlBackend):
     """PostgreSQL implementation of Backend"""
     
-    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None):
-        super().__init__(config, column_schema)
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None):
+        super().__init__(config, column_schema, logger=logger)
         self._connection = None
     
     def _get_default_schema(self) -> str:
@@ -46,6 +48,7 @@ class PostgresBackend(SqlBackend):
     
     async def execute_query(self, query: str, params: Optional[list] = None, action: Optional[str] = 'select') -> List[Dict]:
         """Execute query and return DataFrame"""
+        self.logger.info(f"Executing query: {query} with params: {params}")
         # print(query)
         if action == 'select':
             rows = await self._connection.fetch(query, *(params if params else []))
@@ -128,7 +131,7 @@ class PostgresBackend(SqlBackend):
     async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch hashes based on partition bounds"""
         # query = self._build_partition_data_query(partition, partition_column=self.column_mapping.delta_key, with_hash=with_hash, hash_algo=hash_algo)
-        query = self._build_partition_hash_query(partition, hash_algo)
+        query: Query = self._build_partition_hash_query(partition, hash_algo)
         query = self._rewrite_query(query)
         sql, params = self._build_sql(query)
         # print(sql, params)
@@ -194,36 +197,52 @@ class PostgresBackend(SqlBackend):
 
     def _build_group_name_expr(self, field: Field) -> str:
         metadata: BlockNameMeta = field.metadata
-        level = metadata.level
+        level = metadata.level # level is the current level for which we are building the group name
         intervals = metadata.intervals
         partition_column = metadata.partition_column
         partition_column_type = metadata.partition_column_type
+        parent_partition_id = metadata.parent_partition_id
+        ids = [int(i) for i in parent_partition_id.split('-')] if parent_partition_id else []
+        parent_offset = sum([intervals[i]*ids[i] for i in range(len(ids))]) if len(ids) > 0 else 0
 
         if partition_column_type == UniversalDataType.INTEGER:
             # For integer partition columns, we divide by the interval
-            segments = []
-            for idx in range(level+1):
-                fct = intervals[idx]
-                if idx == 0:
-                    expr = f"FLOOR({partition_column} / {intervals[idx]})"
-                else:
-                    prev = intervals[idx-1]
-                    expr = f"FLOOR(mod({partition_column}, {prev}) / {intervals[idx]})"
-                segments.append(f"{expr}::text")
-            return " || '-' || ".join(segments)
+            # segments = []
+            # for idx in range(level+1):
+            #     fct = intervals[idx]
+            #     if idx == 0:
+            #         expr = f"FLOOR({partition_column} / {intervals[idx]})"
+            #     else:
+            #         prev = intervals[idx-1]
+            #         expr = f"FLOOR(mod({partition_column}, {prev}) / {intervals[idx]})"
+            #     segments.append(f"{expr}::text")
+            # return " || '-' || ".join(segments)
+            expr = f"FLOOR(({partition_column} - {parent_offset}) / {intervals[level]})::text"
+            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
         elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
-            segments = []
-            for idx in range(level+1):
-                fct = intervals[idx]
-                if idx == 0:
-                    expr = f"FLOOR(EXTRACT(EPOCH FROM {partition_column}) / {fct})"
-                else:
-                    prev = intervals[idx-1]
-                    expr = f"FLOOR(mod(EXTRACT(EPOCH FROM {partition_column}) ,{prev}) / {fct})"
-                    
-                segments.append(f"{expr}::text")
-            return " || '-' || ".join(segments)
+            # segments = []
+            # for idx in range(level+1):
+            #     fct = intervals[idx]
+            #     if idx == 0:
+            #         expr = f"FLOOR(EXTRACT(EPOCH FROM {partition_column}) / {fct})"
+            #     else:
+            #         prev = intervals[idx-1]
+            #         expr = f"FLOOR(mod(EXTRACT(EPOCH FROM {partition_column}) ,{prev}) / {fct})"
+
+            #     segments.append(f"{expr}::text")
+            # return " || '-' || ".join(segments)
+            expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column}) - {parent_offset}) / {intervals[level]})::text"
+            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+
+        elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+            # get current number from parent partition id
+
+            expr = f"FLOOR((('x' || substr({partition_column}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{intervals[level]})::text"
+            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+
+
+
         else:
             raise ValueError(f"Unsupported partition type: {partition_column}")
 
@@ -278,20 +297,21 @@ class PostgresBackend(SqlBackend):
         """Build partition hash query for PostgreSQL"""
         start = partition.start
         end = partition.end
-        partition_column_type = partition.column_type
+        partition_column: Column = self.column_schema.partition_key
+        partition_column_type: UniversalDataType | None = partition_column.dtype
 
-        hash_column = self.column_schema.hash_key.expr if self.column_schema.hash_key else None
-        partition_column = self.column_schema.partition_key.expr
-        order_keys = self.column_schema.order_keys
-        order_column = ",".join([f"{c.expr} {d}" for c,d in order_keys]) if order_keys else None
+        hash_column: Column | None = self.column_schema.hash_key
+        # partition_column = self.column_schema.partition_key
+        order_keys: list[tuple[Column, str]] | None = self.column_schema.order_keys
+        order_column_expr = ",".join([f"{c.expr} {d}" for c,d in order_keys]) if order_keys else None
         
         partition_hash_field = Field(
-            expr=f"{partition_column}",
+            expr=f"{partition_column.expr}",
             alias="partition_hash",
             metadata=BlockHashMeta(
-                order_column=order_column,
-                partition_column = partition_column,
-                hash_column = hash_column,
+                order_column=order_column_expr,
+                partition_column = partition_column.expr,
+                hash_column = hash_column.expr if hash_column else None,
                 strategy = hash_algo,
                 fields = [Field(expr=x.expr) for x in self.column_schema.columns_to_fetch()],
                 partition_column_type=partition_column_type
@@ -304,7 +324,8 @@ class PostgresBackend(SqlBackend):
             intervals=partition.intervals,
             partition_column_type=partition_column_type,
             strategy=hash_algo,
-            partition_column=partition_column
+            partition_column=partition_column.expr,
+            parent_partition_id=partition.partition_id
         ), type="blockname")
 
         select = [
@@ -317,19 +338,26 @@ class PostgresBackend(SqlBackend):
         filters = []
         if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
             filters += [
-                Filter(column=partition_column, operator='>=', value=start), 
-                Filter(column=partition_column, operator='<', value=end)
+                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+                Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
             ]
         elif partition_column_type == UniversalDataType.INTEGER:
             filters += [
-                Filter(column=partition_column, operator='>=', value=start), 
-                Filter(column=partition_column, operator='<', value=end)
+                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+                Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
             ]
         elif partition_column_type == UniversalDataType.VARCHAR:
             filters += [
-                Filter(column=partition_column, operator='>=', value=start), 
-                Filter(column=partition_column, operator='<', value=end)
+                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+                Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
             ]
+        elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+            filters += [
+                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+                Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
+            ]
+        else:
+            raise ValueError(f"Unsupported partition type: {partition_column_type}")
         filters += self._build_filter_query()
         query = Query(
             select=select,
