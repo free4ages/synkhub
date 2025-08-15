@@ -114,6 +114,8 @@ class SchedulerCLI:
         scheduler = FileBasedScheduler(config)
         
         try:
+            # Load datastores first
+            await scheduler.load_datastores()
             await scheduler.load_configs()
             job_config = scheduler.get_job_config(args.job_name)
             
@@ -133,14 +135,15 @@ class SchedulerCLI:
             if args.strategy:
                 print(f"Strategy: {args.strategy}")
             
-            # Create job manager with metrics (no locking for manual runs)
+            # Create job manager with metrics and data_storage (no locking for manual runs)
             metrics_storage = MetricsStorage(config.metrics_dir, config.max_runs_per_job)
             from ..monitoring.logs_storage import LogsStorage
             logs_storage = LogsStorage(config.logs_dir, config.max_runs_per_job)
             job_manager = SyncJobManager(
                 max_concurrent_jobs=1, 
                 metrics_storage=metrics_storage,
-                logs_storage=logs_storage
+                logs_storage=logs_storage,
+                data_storage=scheduler.get_data_storage()  # Pass the loaded datastores
                 # No lock_manager for manual CLI runs
             )
             

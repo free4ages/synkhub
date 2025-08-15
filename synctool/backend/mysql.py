@@ -1,7 +1,7 @@
 import math
 import io
 from typing import Any, List, Optional, Dict, Tuple
-from synctool.core.models import StrategyConfig, BackendConfig
+from synctool.core.models import StrategyConfig, BackendConfig, DataStorage
 from synctool.core.enums import HashAlgo
 from synctool.core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Query, RowHashMeta
 from synctool.utils.sql_builder import SqlBuilder
@@ -16,8 +16,8 @@ MAX_MYSQL_PARAMS = 65535  # MySQL limit for placeholders
 class MySQLBackend(SqlBackend):
     """MySQL implementation of Backend"""
 
-    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None):
-        super().__init__(config, column_schema)
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger=None, data_storage: Optional[DataStorage] = None):
+        super().__init__(config, column_schema, logger=logger, data_storage=data_storage)
         self._pool = None
 
     def _get_default_schema(self) -> str:

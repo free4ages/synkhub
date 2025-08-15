@@ -5,7 +5,7 @@ from datetime import timedelta, datetime
 from typing import Any, List, Optional, Dict, Tuple
 
 from ..core.models import StrategyConfig
-from ..core.models import BackendConfig
+from ..core.models import BackendConfig, DataStorage
 from ..core.enums import HashAlgo
 from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
 from ..utils.sql_builder import SqlBuilder
@@ -20,8 +20,8 @@ MAX_PG_PARAMS = 31000
 class PostgresBackend(SqlBackend):
     """PostgreSQL implementation of Backend"""
     
-    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None):
-        super().__init__(config, column_schema, logger=logger)
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
+        super().__init__(config, column_schema, logger=logger, data_storage=data_storage)
         self._connection = None
     
     def _get_default_schema(self) -> str:
@@ -29,14 +29,17 @@ class PostgresBackend(SqlBackend):
     
     async def connect(self):
         """Connect to PostgreSQL database"""
+        # import pdb; pdb.set_trace()
         try:
             import asyncpg
+            database_name = self.connection_config.database or self.connection_config.dbname
+            self.logger.info(f"Connecting to PostgreSQL: host={self.connection_config.host}, port={self.connection_config.port}, user={self.connection_config.user}, database={database_name}")
             self._connection = await asyncpg.create_pool(
                 host=self.connection_config.host,
                 port=self.connection_config.port,
                 user=self.connection_config.user,
                 password=self.connection_config.password,
-                database=self.connection_config.database or self.connection_config.dbname
+                database=database_name
             )
         except ImportError:
             raise ImportError("asyncpg is required for PostgreSQL provider")

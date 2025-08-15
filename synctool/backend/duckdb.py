@@ -1,14 +1,14 @@
 import pandas as pd
 from typing import Optional, Dict
 from .base_backend import Backend
-from ..core.models import BackendConfig
+from ..core.models import BackendConfig, DataStorage
 from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 class DuckDBBackend(Backend):
     """DuckDB implementation of Backend with S3 backend support"""
     
-    def __init__(self, config: BackendConfig):
-        super().__init__(config)
+    def __init__(self, config: BackendConfig, column_schema=None, logger=None, data_storage: Optional[DataStorage] = None):
+        super().__init__(config, column_schema=column_schema, logger=logger, data_storage=data_storage)
         self._connection = None
     
     async def connect(self):

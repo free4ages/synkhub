@@ -29,6 +29,43 @@ class ConnectionConfig:
 
 
 @dataclass
+class DataStore:
+    """Centralized data store configuration for database connections"""
+    name: str
+    type: str  # postgres, mysql, clickhouse, duckdb, object_storage, etc.
+    connection: ConnectionConfig
+    description: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        # Convert dict to ConnectionConfig if needed
+        if isinstance(self.connection, dict):
+            self.connection = ConnectionConfig(**self.connection)
+
+
+@dataclass  
+class DataStorage:
+    """Collection of data stores for centralized connection management"""
+    datastores: Dict[str, DataStore] = field(default_factory=dict)
+    
+    def add_datastore(self, datastore: DataStore):
+        """Add a data store to the collection"""
+        self.datastores[datastore.name] = datastore
+    
+    def get_datastore(self, name: str) -> Optional[DataStore]:
+        """Get a data store by name"""
+        return self.datastores.get(name)
+    
+    def list_datastores(self) -> List[str]:
+        """List all available data store names"""
+        return list(self.datastores.keys())
+    
+    def get_datastores_by_type(self, store_type: str) -> List[DataStore]:
+        """Get all data stores of a specific type"""
+        return [ds for ds in self.datastores.values() if ds.type == store_type]
+
+
+@dataclass
 class ColumnConfig:
     """Column configuration for source to destination mapping"""
     name: str
@@ -188,7 +225,7 @@ class SyncProgress:
 class BackendConfig:
     """Provider configuration"""
     type: str
-    connection: Optional[Dict[str, Any]] = None
+    datastore_name: str  # Reference to DataStore name instead of direct connection
     table: Optional[str] = None
     schema: Optional[str] = None
     alias: Optional[str] = None
@@ -212,8 +249,8 @@ class SyncJobConfig:
     description: str
     partition_step: int
     partition_key: str
-    source_provider: Dict[str, ProviderConfig]
-    destination_provider: Dict[str, ProviderConfig]
+    source_provider: ProviderConfig
+    destination_provider: ProviderConfig
     # Column mapping configuration
     column_map: List[Dict[str, Any]]
     strategies: List[Dict[str, Any]] = field(default_factory=list)

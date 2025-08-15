@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from ..monitoring.metrics_storage import MetricsStorage
     from ..scheduler.redis_lock_manager import RedisLockManager
 
-from ..core.models import SyncJobConfig, SyncProgress
+from ..core.models import SyncJobConfig, SyncProgress, DataStorage
 from ..monitoring.metrics_collector import MetricsCollector
 from ..monitoring.logging_collector import LoggingCollector
 from ..monitoring.logs_storage import LogsStorage
@@ -19,11 +19,13 @@ class SyncJobManager:
     def __init__(self, max_concurrent_jobs: int = 2, 
                  metrics_storage: Optional['MetricsStorage'] = None,
                  lock_manager: Optional['RedisLockManager'] = None,
-                 logs_storage: Optional[LogsStorage] = None):
+                 logs_storage: Optional[LogsStorage] = None,
+                 data_storage: Optional[DataStorage] = None):
         self.max_concurrent_jobs = max_concurrent_jobs
         self.metrics_storage = metrics_storage
         self.lock_manager = lock_manager
         self.logs_storage = logs_storage
+        self.data_storage = data_storage
         self.active_jobs: Dict[str, SyncEngine] = {}
         self.job_semaphore = asyncio.Semaphore(max_concurrent_jobs)
         self.logger = logging.getLogger(f"{__name__}.SyncJobManager")
@@ -80,8 +82,8 @@ class SyncJobManager:
         try:
             self.logger.info(f"Starting sync job: {job_name} with strategy: {strategy_name}")
             
-            # Create sync engine with metrics collector
-            sync_engine = SyncEngine(config, metrics_collector, logger=self.logger)
+            # Create sync engine with metrics collector and data storage
+            sync_engine = SyncEngine(config, metrics_collector, logger=self.logger, data_storage=self.data_storage)
             
             # Create progress callback wrapper that updates metrics
             def combined_progress_callback(progress: SyncProgress):

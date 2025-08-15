@@ -11,7 +11,7 @@ import decimal
 import logging
 
 from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
-from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column
+from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column, DataStorage
 from ..core.column_mapper import ColumnSchema  # Add this import
 from ..core.enums import HashAlgo, BackendType
 from ..core.decorators import async_retry
@@ -116,13 +116,33 @@ class BaseBackend(ABC):
 
 
 class Backend(BaseBackend):
-    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None):
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
         self.config = config
         self.provider_type = BackendType(config.type)
-        self.connection_config = ConnectionConfig(**config.connection) if config.connection else ConnectionConfig()
+        
+        # Debug logging
+        if logger:
+            logger.info(f"Backend init - datastore_name: {getattr(config, 'datastore_name', 'NOT_SET')}, data_storage: {'Available' if data_storage else 'None'}")
+            if data_storage:
+                logger.info(f"Available datastores: {list(data_storage.datastores.keys())}")
+        
+        # Resolve datastore_name to connection config
+        if hasattr(config, 'datastore_name') and config.datastore_name and data_storage:
+            datastore = data_storage.get_datastore(config.datastore_name)
+            if not datastore:
+                raise ValueError(f"Datastore '{config.datastore_name}' not found in DataStorage")
+            self.connection_config = datastore.connection
+            if logger:
+                logger.info(f"Using datastore '{config.datastore_name}' connection config")
+        else:
+            # Fallback for backward compatibility with direct connection config
+            self.connection_config = ConnectionConfig(**config.connection) if hasattr(config, 'connection') and config.connection else ConnectionConfig()
+            if logger:
+                logger.info(f"Using fallback connection config: {self.connection_config}")
+        
         self.table = config.table
         self.alias = config.alias
-        self.schema = self.connection_config.schema or config.schema or self._get_default_schema()
+        self.schema = config.schema or self.connection_config.schema or self._get_default_schema()
         # Removed: self.columns = [ColumnConfig(**col) for col in config.columns] if config.columns else []
         self.joins = [JoinConfig(**join) for join in config.join] if config.join else []
         # Fix filter parsing - config.filters should be List[Dict] not List[str]

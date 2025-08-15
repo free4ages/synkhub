@@ -5,24 +5,14 @@ max_concurrent_partitions: 2
 source_provider:
   data_backend:
     type: 'postgres'
-    connection:
-      host: 'localhost'
-      port: 5432
-      dbname: 'test_db'
-      user: 'test_user'
-      password: 'test_password'
+    datastore_name: 'local_postgres'
     table: 'source_table'
     schema: 'public'
 
 destination_provider:
   data_backend:
     type: 'postgres'
-    connection:
-      host: 'localhost'
-      port: 5432
-      dbname: 'test_db'
-      user: 'test_user'
-      password: 'test_password'
+    datastore_name: 'local_postgres'
     table: 'dest_table'
     schema: 'public'
 
@@ -37,6 +27,10 @@ column_map:
     src: 'name'
     dest: 'name'
     dtype: 'varchar'
+  - name: 'updated_at'
+    src: 'updated_at'
+    dest: 'updated_at'
+    dtype: 'timestamp'
 
 partition_key: 'id'
 partition_step: 1000

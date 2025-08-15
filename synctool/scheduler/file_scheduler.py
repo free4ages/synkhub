@@ -8,7 +8,7 @@ from croniter import croniter
 from datetime import datetime, timedelta
 
 from ..config.config_loader import ConfigLoader
-from ..core.models import SyncJobConfig, SchedulerConfig
+from ..core.models import SyncJobConfig, SchedulerConfig, DataStorage, DataStore
 from ..sync.sync_job_manager import SyncJobManager
 from ..monitoring.metrics_storage import MetricsStorage
 from ..monitoring.logs_storage import LogsStorage
@@ -23,6 +23,7 @@ class FileBasedScheduler:
         self.logger = logging.getLogger(__name__)
         self.running = False
         self.job_configs: Dict[str, SyncJobConfig] = {}
+        self.data_storage: Optional[DataStorage] = None
         
         # Initialize components
         self.metrics_storage = MetricsStorage(
@@ -38,13 +39,8 @@ class FileBasedScheduler:
             lock_timeout=scheduler_config.lock_timeout
         )
         
-        # Create job manager with metrics, logging and locking
-        self.job_manager = SyncJobManager(
-            max_concurrent_jobs=4,
-            metrics_storage=self.metrics_storage,
-            lock_manager=self.lock_manager,
-            logs_storage=self.logs_storage
-        )
+        # Job manager will be created after datastores are loaded
+        self.job_manager: Optional[SyncJobManager] = None
         
         # Track last run times for each strategy
         self.last_run_times: Dict[str, datetime] = {}
@@ -53,6 +49,22 @@ class FileBasedScheduler:
         """Start the scheduler"""
         self.running = True
         self.logger.info(f"Starting file-based scheduler, reading configs from: {self.config.config_dir}")
+        
+        # Load datastores first
+        await self.load_datastores()
+        
+        # Create job manager now that datastores are loaded
+        self.logger.info(f"Creating SyncJobManager with data_storage: {'Available' if self.data_storage else 'None'}")
+        if self.data_storage:
+            self.logger.info(f"DataStorage contains {len(self.data_storage.datastores)} datastores: {list(self.data_storage.datastores.keys())}")
+        
+        self.job_manager = SyncJobManager(
+            max_concurrent_jobs=4,
+            metrics_storage=self.metrics_storage,
+            lock_manager=self.lock_manager,
+            logs_storage=self.logs_storage,
+            data_storage=self.data_storage
+        )
         
         # Load initial configs
         await self.load_configs()
@@ -71,8 +83,37 @@ class FileBasedScheduler:
         self.running = False
         self.logger.info("Stopping file-based scheduler")
     
+    async def load_datastores(self):
+        """Load datastores configuration from datastores.yaml"""
+        config_dir = Path(self.config.config_dir)
+        datastores_file = config_dir / "datastores.yaml"
+        
+        if not datastores_file.exists():
+            self.logger.warning(f"Datastores config file does not exist: {datastores_file}")
+            self.logger.warning("Creating empty DataStorage - sync jobs may fail without datastore references")
+            self.data_storage = DataStorage()
+            return
+        
+        try:
+            self.data_storage = ConfigLoader.load_datastores_from_yaml(str(datastores_file))
+            
+            # Validate datastores config
+            issues = ConfigLoader.validate_datastores_config(self.data_storage)
+            if issues:
+                self.logger.error(f"Datastores validation failed: {issues}")
+                return
+            
+            self.logger.info(f"Loaded {len(self.data_storage.datastores)} datastores: {list(self.data_storage.datastores.keys())}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load datastores from {datastores_file}: {e}")
+            self.data_storage = DataStorage()
+    
     async def load_configs(self):
         """Load all YAML config files from the config directory"""
+
+        await self.load_datastores()
+        
         config_dir = Path(self.config.config_dir)
         if not config_dir.exists():
             self.logger.warning(f"Config directory does not exist: {config_dir}")
@@ -81,6 +122,10 @@ class FileBasedScheduler:
         self.job_configs.clear()
         
         for config_file in config_dir.glob("*.yaml"):
+            # Skip datastores.yaml as it's handled separately
+            if config_file.name == "datastores.yaml":
+                continue
+                
             try:
                 with open(config_file, 'r') as f:
                     config_data = yaml.safe_load(f)
@@ -97,11 +142,41 @@ class FileBasedScheduler:
                     self.logger.error(f"Config validation failed for {config_file}: {issues}")
                     continue
                 
+                # Validate that referenced datastores exist
+                datastore_issues = self._validate_datastore_references(job_config)
+                if datastore_issues:
+                    self.logger.error(f"Datastore validation failed for {config_file}: {datastore_issues}")
+                    continue
+                
                 self.job_configs[job_config.name] = job_config
                 self.logger.info(f"Loaded config: {job_config.name}")
                 
             except Exception as e:
                 self.logger.error(f"Failed to load config from {config_file}: {e}")
+    
+    def _validate_datastore_references(self, job_config: SyncJobConfig) -> List[str]:
+        """Validate that all referenced datastores exist"""
+        issues = []
+        
+        if not self.data_storage:
+            issues.append("No datastores configuration loaded")
+            return issues
+        
+        # Check source provider datastore
+        if job_config.source_provider and job_config.source_provider.data_backend:
+            if hasattr(job_config.source_provider.data_backend, 'datastore_name'):
+                datastore_name = job_config.source_provider.data_backend.datastore_name
+                if not self.data_storage.get_datastore(datastore_name):
+                    issues.append(f"Source provider references unknown datastore: {datastore_name}")
+        
+        # Check destination provider datastore
+        if job_config.destination_provider and job_config.destination_provider.data_backend:
+            if hasattr(job_config.destination_provider.data_backend, 'datastore_name'):
+                datastore_name = job_config.destination_provider.data_backend.datastore_name
+                if not self.data_storage.get_datastore(datastore_name):
+                    issues.append(f"Destination provider references unknown datastore: {datastore_name}")
+        
+        return issues
     
     async def _schedule_jobs(self):
         """Check and schedule jobs based on cron expressions"""
@@ -122,7 +197,8 @@ class FileBasedScheduler:
                 # Check if it's time to run this strategy
                 if self._should_run_strategy(strategy_key, cron_expr, current_time):
                     # Schedule the job (job_manager handles locking)
-                    asyncio.create_task(self._run_job(job_config, strategy_name))
+                    if self.job_manager:
+                        asyncio.create_task(self._run_job(job_config, strategy_name))
     
     def _should_run_strategy(self, strategy_key: str, cron_expr: str, current_time: datetime) -> bool:
         """Check if a strategy should run based on its cron expression"""
@@ -149,6 +225,10 @@ class FileBasedScheduler:
         
         try:
             # Run the job - job_manager handles locking and metrics
+            if not self.job_manager:
+                self.logger.error(f"Job manager not initialized for {job_name}:{strategy_name}")
+                return
+                
             result = await self.job_manager.run_sync_job(
                 config=job_config,
                 strategy_name=strategy_name,
@@ -170,3 +250,13 @@ class FileBasedScheduler:
     def get_job_config(self, job_name: str) -> Optional[SyncJobConfig]:
         """Get a specific job configuration"""
         return self.job_configs.get(job_name)
+    
+    def get_data_storage(self) -> Optional[DataStorage]:
+        """Get the loaded DataStorage configuration"""
+        return self.data_storage
+    
+    def get_datastore(self, datastore_name: str) -> Optional[DataStore]:
+        """Get a specific datastore by name"""
+        if self.data_storage:
+            return self.data_storage.get_datastore(datastore_name)
+        return None

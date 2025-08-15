@@ -5,7 +5,7 @@ import math
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from synctool.core.models import StrategyConfig, BackendConfig
+from synctool.core.models import StrategyConfig, BackendConfig, DataStorage
 from synctool.core.enums import HashAlgo
 from synctool.core.query_models import Query, Field, Filter, BlockHashMeta, BlockNameMeta, RowHashMeta
 from synctool.utils.sql_builder import SqlBuilder
@@ -35,8 +35,10 @@ class ClickHouseBackend(SqlBackend):
         replacing_column: Optional[str] = None,
         batch_size: int = 10_000,
         session_kwargs: Optional[dict] = None,
+        logger=None,
+        data_storage: Optional['DataStorage'] = None
     ):
-        super().__init__(config, column_schema)
+        super().__init__(config, column_schema, logger=logger, data_storage=data_storage)
         self.host = host.rstrip("/")
         self.database = database or config.database if hasattr(config, "database") else None
         self.table = table or getattr(self, "table", None)

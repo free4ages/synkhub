@@ -9,23 +9,23 @@ from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..monitoring.metrics_collector import MetricsCollector
 
-from ..core.models import SyncJobConfig, StrategyConfig, SyncProgress, Partition
+from ..core.models import SyncJobConfig, StrategyConfig, SyncProgress, Partition, DataStorage, ProviderConfig
 from ..core.enums import HashAlgo, SyncStrategy, BackendType
 from ..core.provider import Provider
 from ..core.column_mapper import ColumnMapper
 from ..utils.partition_generator import PartitionConfig, PartitionGenerator, add_exclusive_range
 from ..utils.hash_calculator import HashCalculator
 from ..enrichment.enrichment_engine import EnrichmentEngine
-from .partition_processor import PartitionProcessor
+from ..sync.partition_processor import PartitionProcessor
 from ..core.schema_models import UniversalDataType
 
 class SyncEngine:
     """Main sync engine that orchestrates the sync process"""
     
-    def __init__(self, config: SyncJobConfig, metrics_collector: Optional['MetricsCollector'] = None, logger= None):
+    def __init__(self, config: SyncJobConfig, metrics_collector: Optional['MetricsCollector'] = None, logger= None, data_storage: Optional[DataStorage] = None):
         self.config = config
-        self.source_provider: Provider = None
-        self.destination_provider: Provider = None
+        self.source_provider: Provider 
+        self.destination_provider: Provider
         self.strategies: Dict[str, StrategyConfig] = {}
         self.enrichment_engine: Optional[EnrichmentEngine] = None
         self.hash_calculator = HashCalculator()
@@ -33,8 +33,9 @@ class SyncEngine:
         logger_name = f"{logger.name}.engine" if logger else f"{__name__}.engine"
         self.logger = logging.getLogger(logger_name)
         self.hash_algo = config.hash_algo or HashAlgo.HASH_MD5_HASH
-        self.column_mapper: ColumnMapper = None
+        self.column_mapper: ColumnMapper
         self.metrics_collector = metrics_collector
+        self.data_storage = data_storage
         
         # Thread pool for partition processing
         self.executor = concurrent.futures.ThreadPoolExecutor(
@@ -47,13 +48,18 @@ class SyncEngine:
         """Initialize all providers and components"""
         # Create ColumnMapper if column_map is present in config
         # Parse strategies
-        for strategy_config in self.config.strategies:
-            if not strategy_config.get('enabled', True):
+        for strategy_config_dict in self.config.strategies:
+            if not strategy_config_dict.get('enabled', True):
                 continue
-            if strategy_config.get('type') in (SyncStrategy.FULL, SyncStrategy.HASH) and strategy_config.get('column')!=self.config.partition_key:
-                self.logger.warning(f"Column {strategy_config.get('column')} is not the same as partition key {self.config.partition_key}. It will be ignored")
-                strategy_config['column'] = self.config.partition_key
-            strategy = StrategyConfig(**strategy_config)
+            
+            # Make a copy to avoid modifying the original config
+            strategy_config_copy = strategy_config_dict.copy()
+            
+            if strategy_config_copy.get('type') in (SyncStrategy.FULL, SyncStrategy.HASH) and strategy_config_copy.get('column') != self.config.partition_key:
+                self.logger.warning(f"Column {strategy_config_copy.get('column')} is not the same as partition key {self.config.partition_key}. It will be ignored")
+                strategy_config_copy['column'] = self.config.partition_key
+            
+            strategy = StrategyConfig(**strategy_config_copy)
             self.strategies[strategy.name] = strategy
         
                 # Initialize enrichment engine
@@ -140,10 +146,14 @@ class SyncEngine:
             # Generate partitions
             partitions = []
             if strategy_config and sync_start is not None and sync_end is not None:
+                if not self.column_mapper:
+                    raise ValueError("Column mapper not initialized")
+                column_info = self.column_mapper.column(strategy_config.column)
+                column_type_str = column_info.dtype if column_info.dtype else "string"
                 partition_generator: PartitionGenerator = PartitionGenerator(PartitionConfig(
                     name="main_partition_{pid}",
                     column=strategy_config.column,
-                    column_type=self.column_mapper.column(strategy_config.column).dtype,
+                    column_type=column_type_str,
                     partition_step=self.config.partition_step
                 ))
                 partitions: list[Partition] = await partition_generator.generate_partitions(sync_start, sync_end)
@@ -192,9 +202,8 @@ class SyncEngine:
             return sync_result
             
         except Exception as e:
-            raise e
-            self.logger.error(f"Sync job failed: {str(e)}")
-            # Return error result instead of raising
+            import traceback
+            self.logger.error(f"Sync job failed: {traceback.format_exc()}")
             return {
                 'job_name': self.config.name,
                 'status': 'failed',
@@ -202,10 +211,11 @@ class SyncEngine:
                 'total_partitions': 0,
                 'successful_partitions': 0,
                 'failed_partitions': 1,
-                'total_rows_processed': 0,
+                'total_rows_detected': 0,
                 'total_rows_inserted': 0,
                 'total_rows_updated': 0,
-                'duration': f"{(datetime.now() - self.progress.start_time).total_seconds()} seconds" if hasattr(self.progress, 'start_time') else None,
+                'total_rows_deleted': 0,
+                'duration': f"{(datetime.now() - self.progress.start_time).total_seconds()} seconds" if self.progress.start_time else "0 seconds",
                 'partition_results': []
             }
         finally:
@@ -223,7 +233,9 @@ class SyncEngine:
          
             for partition in partitions:
                 try:
-                    processor: PartitionProcessor = PartitionProcessor(self, partition, strategy, strategy_config)
+                    if strategy_config is None:
+                        raise ValueError(f"Strategy config is required for partition processing")
+                    processor: 'PartitionProcessor' = PartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
                     result: dict[str, Any] = await processor.process()
                     results.append(result)
                     # Update progress to mirror concurrent path
@@ -257,7 +269,10 @@ class SyncEngine:
         async def process_partition_with_semaphore(partition: Partition) -> Dict[str, Any]:
             async with semaphore:
                 try:
-                    processor = PartitionProcessor(self, partition, strategy, strategy_config)
+                    if strategy_config is None:
+                        raise ValueError(f"Strategy config is required for partition processing")
+
+                    processor = PartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
                     result = await processor.process()
                     
                     # Update progress
@@ -302,12 +317,12 @@ class SyncEngine:
             tasks = [process_partition_with_semaphore(partition) for partition in batch]
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            for result in batch_results:
-                if isinstance(result, Exception):
-                    self.logger.error(f"Batch processing error: {str(result)}")
+            for batch_result in batch_results:
+                if isinstance(batch_result, Exception):
+                    self.logger.error(f"Batch processing error: {str(batch_result)}")
                     results.append({
                         'status': 'failed',
-                        'error': str(result),
+                        'error': str(batch_result),
                         'rows_detected': 0,
                         'rows_inserted': 0,
                         'rows_updated': 0,
@@ -316,12 +331,16 @@ class SyncEngine:
                         'data_query_count': 0,
                     })
                 else:
-                    results.append(result)
+                    # batch_result should be a dict at this point
+                    if isinstance(batch_result, dict):
+                        results.append(batch_result)
         
         return results
     
     async def _determine_strategy(self, strategy_name: Optional[str], start: Any, end: Any) -> Tuple[SyncStrategy, Optional[StrategyConfig]]:
         """Determine which sync strategy to use"""
+        if not self.destination_provider:
+            raise ValueError("Destination provider not initialized")
         if not await self.destination_provider.has_data():
             # Find full strategy
             full_strategy = next((s for s in self.strategies.values() if s.type == SyncStrategy.FULL), None)
@@ -356,10 +375,12 @@ class SyncEngine:
             return start, end
         
         if strategy == SyncStrategy.DELTA and strategy_config:
+            if not self.destination_provider or not self.source_provider:
+                raise ValueError("Providers not initialized for delta sync")
             dest_start = await self.destination_provider.get_last_sync_point()
             source_end = await self.source_provider.get_max_sync_point()
             return dest_start, source_end
-        if strategy_config.column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        if strategy_config and strategy_config.column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
             start = "00000000000000000000000000000000"
             end = "ffffffffffffffffffffffffffffffff"
             if strategy_config.column_type == UniversalDataType.UUID_TEXT_DASH:
@@ -370,10 +391,16 @@ class SyncEngine:
 
         return await self.source_provider.get_partition_bounds()
     
-    async def _create_provider(self, config: Dict[str, Any], data_column_schema=None, state_column_schema=None, role=None) -> Provider:
+    async def _create_provider(self, provider_config: ProviderConfig, data_column_schema=None, state_column_schema=None, role=None) -> Provider:
         """Factory method to create providers with ColumnSchema for both data and state"""
+        # Convert ProviderConfig to dictionary format that Provider expects
+        config = {
+            'data_backend': provider_config.data_backend.__dict__ if provider_config.data_backend else None,
+            'state_backend': provider_config.state_backend.__dict__ if provider_config.state_backend else None
+        }
+        
         # Create provider with column schemas for both data and state backends
-        provider = Provider(config, data_column_schema=data_column_schema, state_column_schema=state_column_schema, role=role)
+        provider = Provider(config, data_column_schema=data_column_schema, state_column_schema=state_column_schema, role=role, logger=self.logger, data_storage=self.data_storage)
         await provider.connect()
         return provider
     

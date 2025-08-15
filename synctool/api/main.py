@@ -73,17 +73,13 @@ app.add_middleware(
 )
 
 # Include routers (imported here to avoid circular import)
-from .routers import jobs, runs
+from .routers import jobs, runs, configure, datastores
 app.include_router(jobs.router)
 app.include_router(runs.router)
+app.include_router(configure.router)
+app.include_router(datastores.router)
 
-# Include configure router
-try:
-    from .routers import configure
-    app.include_router(configure.router)
-except ImportError:
-    # Configure router not available
-    pass
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -136,6 +132,21 @@ async def root():
         <div class="endpoint">
             <span class="method">GET</span> <span class="path">/api/runs/</span>
             <br>List runs from all jobs
+        </div>
+        
+        <div class="endpoint">
+            <span class="method">GET</span> <span class="path">/api/datastores/</span>
+            <br>List all available datastores
+        </div>
+        
+        <div class="endpoint">
+            <span class="method">GET</span> <span class="path">/api/datastores/{datastore_name}</span>
+            <br>Get detailed information about a specific datastore
+        </div>
+        
+        <div class="endpoint">
+            <span class="method">POST</span> <span class="path">/api/datastores/test-connection/{datastore_name}</span>
+            <br>Test connection to a specific datastore
         </div>
         
         <h2>Documentation:</h2>

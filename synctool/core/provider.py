@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, List, Optional, Any, Tuple
-from .models import BackendConfig, ProviderConfig, Partition
+from .models import BackendConfig, ProviderConfig, Partition, DataStorage
 from .column_mapper import ColumnSchema  # Add this import
 from .enums import HashAlgo
 from ..backend import PostgresBackend, ClickHouseBackend, DuckDBBackend, Backend
@@ -10,10 +10,11 @@ logger = logging.getLogger(__name__)
 class Provider:
     """Unified Provider class that wraps data and state backends"""
     
-    def __init__(self, config: Dict[str, Any], data_column_schema=None, state_column_schema=None, role=None, logger= None):
+    def __init__(self, config: Dict[str, Any], data_column_schema=None, state_column_schema=None, role=None, logger= None, data_storage: Optional[DataStorage] = None):
         data_backend_config = config.get('data_backend', config)
         state_backend_config = config.get('state_backend')
         self.role = role
+        self.data_storage = data_storage
         logger_name = f"{logger.name}.{self.role}.provider" if logger else f"{__name__}.{self.role}.provider"
         self.logger = logging.getLogger(logger_name)
         # Pass column schemas to backends
@@ -33,11 +34,17 @@ class Provider:
         backend_config = BackendConfig(**config)
         
         if backend_config.type == "postgres":
-            return PostgresBackend(backend_config, column_schema, logger=self.logger)
+            return PostgresBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
+        elif backend_config.type == "mysql":
+            from ..backend.mysql import MySQLBackend
+            return MySQLBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
         elif backend_config.type == "clickhouse":
-            return ClickHouseBackend(backend_config, column_schema, logger=self.logger)
+            return ClickHouseBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
+        elif backend_config.type == "starrocks":
+            from ..backend.starrocks import StarRocksBackend
+            return StarRocksBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
         elif backend_config.type == "duckdb":
-            return DuckDBBackend(backend_config, column_schema, logger=self.logger)
+            return DuckDBBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
         else:
             raise ValueError(f"Unsupported backend type: {backend_config.type}")
     

@@ -176,8 +176,10 @@ class ColumnMapper:
 
         for role in single_roles:
             fields = get_fields_by_role(role)
-            # if len(fields) == 0:
-            #     raise ValueError(f"Validation Error: No field marked with role '{role}' found.")
+            # Skip validation if no fields with this role (optional roles)
+            if len(fields) == 0:
+                continue
+            
             if len(fields) > 1:
                 field_names = [f.expr for f in fields]
                 raise ValueError(f"Validation Error: Multiple fields marked with role '{role}': {field_names}. Only one allowed.")

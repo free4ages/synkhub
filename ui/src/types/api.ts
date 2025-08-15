@@ -123,3 +123,47 @@ export const LOG_LEVELS = {
 } as const;
 
 export type LogLevel = typeof LOG_LEVELS[keyof typeof LOG_LEVELS];
+
+// DataStore types
+export interface DataStoreResponse {
+  name: string;
+  type: string;
+  description?: string;
+  tags: string[];
+  connection_summary: Record<string, any>;
+}
+
+export interface DataStorageResponse {
+  datastores: DataStoreResponse[];
+  total_count: number;
+}
+
+export interface DataStoreTypesSummary {
+  [type: string]: {
+    count: number;
+    datastores: string[];
+  };
+}
+
+export interface DataStoreTagsSummary {
+  [tag: string]: {
+    count: number;
+    datastores: string[];
+  };
+}
+
+export interface ConnectionTestResponse {
+  status: 'success' | 'error';
+  message: string;
+}
+
+// DataStore constants
+export const DATASTORE_TYPES = {
+  POSTGRES: 'postgres',
+  MYSQL: 'mysql',
+  CLICKHOUSE: 'clickhouse',
+  DUCKDB: 'duckdb',
+  OBJECT_STORAGE: 'object_storage',
+} as const;
+
+export type DataStoreType = typeof DATASTORE_TYPES[keyof typeof DATASTORE_TYPES];

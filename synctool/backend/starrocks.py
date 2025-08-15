@@ -5,7 +5,7 @@ import math
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from synctool.core.models import StrategyConfig, BackendConfig
+from synctool.core.models import StrategyConfig, BackendConfig, DataStorage
 from synctool.core.enums import HashAlgo
 from synctool.core.query_models import Query, Field, Filter, BlockHashMeta, BlockNameMeta, RowHashMeta
 from synctool.utils.sql_builder import SqlBuilder
@@ -36,8 +36,10 @@ class StarRocksBackend(SqlBackend):
         table: Optional[str] = None,
         batch_size: int = 5000,
         session_kwargs: Optional[dict] = None,
+        logger=None,
+        data_storage: Optional['DataStorage'] = None
     ):
-        super().__init__(config, column_schema)
+        super().__init__(config, column_schema, logger=logger, data_storage=data_storage)
         self.fe_host = fe_host.rstrip("/")
         self.user = user
         self.password = password

@@ -5,12 +5,7 @@ max_concurrent_partitions: 1
 source_provider:
   data_backend:
     type: 'postgres'
-    connection:
-      host: 'localhost'
-      port: 5432
-      dbname: 'synctool'
-      user: 'rohitanand'
-      password: ''
+    datastore_name: 'local_postgres'
     table: 'users1'
     alias: 'u'
     schema: 'public'
@@ -24,12 +19,7 @@ source_provider:
 destination_provider:
   data_backend:
     type: 'postgres'
-    connection:
-      host: 'localhost'
-      port: 5432
-      dbname: 'synctool'  
-      user: 'rohitanand'
-      password: ''
+    datastore_name: 'local_postgres'
     table: 'user_profile1'
     schema: 'public_copy'
     supports_update: true

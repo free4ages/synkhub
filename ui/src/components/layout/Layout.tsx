@@ -6,7 +6,8 @@ import {
   Activity, 
   Clock,
   Database,
-  FileText
+  FileText,
+  Server
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
@@ -35,6 +36,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       href: '/runs',
       icon: Activity,
       current: location.pathname.startsWith('/runs'),
+    },
+    {
+      name: 'DataStores',
+      href: '/datastores',
+      icon: Server,
+      current: location.pathname.startsWith('/datastores'),
     },
     {
       name: 'Schedule',
