@@ -231,7 +231,10 @@ export const RunsTable: React.FC<RunsTableProps> = ({ jobName, className }) => {
                     <td className="table-cell">
                       <div className="text-sm">
                         <div className="text-gray-900">
-                          {run.rows_processed.toLocaleString()}
+                          {run.rows_detected.toLocaleString()}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          Fetched: {run.rows_fetched.toLocaleString()}
                         </div>
                         <div className="text-xs text-gray-500">
                           +{run.rows_inserted} -{run.rows_deleted} ~{run.rows_updated}

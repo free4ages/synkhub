@@ -85,45 +85,21 @@ class SyncJobManager:
             # Create sync engine with metrics collector and data storage
             sync_engine = SyncEngine(config, metrics_collector, logger=self.logger, data_storage=self.data_storage)
             
-            # Create progress callback wrapper that updates metrics
-            def combined_progress_callback(progress: SyncProgress):
-                # Update metrics if collector is available
-                if metrics_collector:
-                    metrics_collector.update_progress(
-                        rows_detected=progress.rows_detected,
-                        rows_fetched=progress.rows_fetched,
-                        rows_inserted=progress.rows_inserted,
-                        rows_updated=progress.rows_updated,
-                        rows_deleted=progress.rows_deleted,
-                        partition_count=progress.total_partitions,
-                        successful_partitions=progress.completed_partitions,
-                        failed_partitions=progress.failed_partitions
-                    )
-                
-                # Call the original progress callback
+            # Create progress callback wrapper for job-specific callback
+            def job_progress_callback(progress: SyncProgress):
                 if progress_callback:
                     progress_callback(job_name, progress)
             
-            # Run the sync job
+            # Run the sync job - metrics collection is now handled internally by SyncEngine
             result = await sync_engine.sync(
                 strategy_name=strategy_name,
                 start=start,
                 end=end,
-                progress_callback=combined_progress_callback
+                progress_callback=job_progress_callback
             )
             
-            # Update final metrics
+            # Finish job run - metrics updates are handled by ProgressManager
             if metrics_collector:
-                metrics_collector.update_progress(
-                    rows_detected=result.get('total_rows_detected', 0),
-                    rows_fetched=result.get('total_rows_fetched', 0),
-                    rows_inserted=result.get('total_rows_inserted', 0),
-                    rows_updated=result.get('total_rows_updated', 0),
-                    rows_deleted=result.get('total_rows_deleted', 0),
-                    partition_count=result.get('total_partitions', 0),
-                    successful_partitions=result.get('successful_partitions', 0),
-                    failed_partitions=result.get('failed_partitions', 0)
-                )
                 metrics_collector.finish_job_run("completed")
                 self.logger.info(f"Completed metrics collection for run {run_id}")
             

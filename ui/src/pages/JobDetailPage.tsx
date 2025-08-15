@@ -253,7 +253,7 @@ export const JobDetailPage: React.FC = () => {
                         </div>
                       </div>
                       <div className="text-right text-xs text-gray-600">
-                        <div>{run.rows_processed.toLocaleString()} rows</div>
+                        <div>{run.rows_detected.toLocaleString()} rows detected</div>
                         <div>{apiService.formatDuration(run.duration_seconds)}</div>
                       </div>
                     </div>

@@ -6,6 +6,7 @@ from typing import Tuple, List, Dict, Any, TYPE_CHECKING
 from ..core.enums import DataStatus
 from ..utils.data_comparator import calculate_row_status
 from ..utils.partition_generator import merge_adjacent, build_intervals, calculate_partition_status, to_partitions, PartitionConfig, PartitionGenerator
+from ..utils.sync_result_builder import SyncResultBuilder
 
 from ..core.models import Partition, StrategyConfig, SyncStrategy
 
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 class PartitionProcessor:
     """Process individual partitions with specific sync logic"""
     
-    def __init__(self, sync_engine: 'SyncEngine', partition: Partition, strategy: SyncStrategy, strategy_config: StrategyConfig, logger= None):
+    def __init__(self, sync_engine: Any, partition: Partition, strategy: SyncStrategy, strategy_config: StrategyConfig, logger= None):
         self.sync_engine = sync_engine
         self.partition = partition
         self.strategy = strategy
@@ -112,27 +113,28 @@ class PartitionProcessor:
                 if not use_pagination:
                     break
 
-
-                offset += page_size
-                
-                # If we got fewer rows than page_size, we've reached the end
-                if len(data) < page_size:
+                if page_size:
+                    offset += page_size
+                    
+                    # If we got fewer rows than page_size, we've reached the end
+                    if len(data) < page_size:
+                        break
+                else:
                     break
 
 
         
-        return {
-            'partition_id': self.partition.partition_id,
-            'strategy': 'full',
-            'rows_detected': rows_detected,
-            'rows_fetched': rows_fetched,
-            'rows_inserted': rows_inserted,
-            'rows_updated': 0,
-            'rows_deleted': 0,
-            'status': 'success',
-            'hash_query_count': len(sub_partitions),
-            'data_query_count': len(sub_partitions),
-        }
+        return SyncResultBuilder.build_partition_success_result(
+            partition_id=self.partition.partition_id,
+            strategy=SyncStrategy.FULL,
+            rows_detected=rows_detected,
+            rows_fetched=rows_fetched,
+            rows_inserted=rows_inserted,
+            rows_updated=0,
+            rows_deleted=0,
+            hash_query_count=len(sub_partitions),
+            data_query_count=len(sub_partitions)
+        )
 
     
     async def _process_delta_sync(self) -> Dict[str, Any]:
@@ -192,25 +194,25 @@ class PartitionProcessor:
                 rows_fetched += len(data)
                 if not use_pagination:
                     break
-                
-                offset += page_size
+
+                if page_size:
+                    offset += page_size
                 
                 # If we got fewer rows than page_size, we've reached the end
-                if len(data) < page_size:
+                if page_size and len(data) < page_size:
                     break
         
-        return {
-            'partition_id': self.partition.partition_id,
-            'strategy': 'delta',
-            'rows_detected': rows_inserted,
-            'rows_fetched': rows_fetched,
-            'rows_inserted': rows_inserted,
-            'rows_updated': 0,
-            'rows_deleted': 0,
-            'status': 'success',
-            'hash_query_count': 0,
-            'data_query_count': len(sub_partitions),
-        }
+        return SyncResultBuilder.build_partition_success_result(
+            partition_id=self.partition.partition_id,
+            strategy=SyncStrategy.DELTA,
+            rows_detected=rows_inserted,
+            rows_fetched=rows_fetched,
+            rows_inserted=rows_inserted,
+            rows_updated=0,
+            rows_deleted=0,
+            hash_query_count=0,
+            data_query_count=len(sub_partitions)
+        )
 
     async def _process_hash_sync(self) -> Dict[str, Any]:
         """Process hash-based sync for partition"""
@@ -250,8 +252,8 @@ class PartitionProcessor:
                 rows_deleted += partition.num_rows
             elif status == DataStatus.MODIFIED:
                 if self.strategy_config.prevent_update_unless_changed:
-                    src_hashes, src_hash_has_data = await self.sync_engine.source_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo)
-                    dest_hashes, dest_hash_has_data = await self.sync_engine.destination_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo)
+                    src_hashes, src_hash_has_data = await self.sync_engine.source_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo,with_data=None)
+                    dest_hashes, dest_hash_has_data = await self.sync_engine.destination_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_alg, with_data=False)
                     hash_query_count += 1
                     if src_hash_has_data:
                         rows_fetched += len(src_hashes)
@@ -284,32 +286,32 @@ class PartitionProcessor:
                             r_inserted = await self.sync_engine.destination_provider.insert_partition_data(modified, partition, upsert=True)
                             rows_updated += len(modified)
                         if deleted:
-                            r_deleted = await self.sync_engine.destination_provider.delete_rows(deleted, partition, self.strategy_config)
+                            # Note: delete_rows method needs to be implemented in providers
+                            # r_deleted = await self.sync_engine.destination_provider.delete_rows(deleted, partition, self.strategy_config)
                             rows_deleted += len(deleted)
                     # else:
-                    #     added = 
+                        # added = 
                 else:
                     data = await self.sync_engine.source_provider.fetch_partition_data(partition, hash_algo=self.sync_engine.hash_algo)
                     if self.sync_engine.enrichment_engine:
                         data = await self.sync_engine.enrichment_engine.enrich(data)
                     data_query_count += 1
                     # if status == DataStatus.ADDED:
-                    r_inserted = await self.sync_engine.destination_provider.insert_partition_data(data, partition,column_keys=self.get_destination_columns(), upsert=True)
+                    r_inserted = await self.sync_engine.destination_provider.insert_partition_data(data, partition, upsert=True)
                     rows_inserted += len(data)
                     rows_fetched += len(data)
                 
-        return {
-            'partition_id': self.partition.partition_id,
-            'strategy': self.strategy.value,
-            'rows_detected': rows_detected,
-            'rows_fetched': rows_fetched,
-            'rows_inserted': rows_inserted,
-            'rows_updated': rows_updated,
-            'rows_deleted': rows_deleted,
-            'status': 'success',
-            'hash_query_count': hash_query_count,
-            'data_query_count': data_query_count,
-        }
+        return SyncResultBuilder.build_partition_success_result(
+            partition_id=self.partition.partition_id,
+            strategy=self.strategy,
+            rows_detected=rows_detected,
+            rows_fetched=rows_fetched,
+            rows_inserted=rows_inserted,
+            rows_updated=rows_updated,
+            rows_deleted=rows_deleted,
+            hash_query_count=hash_query_count,
+            data_query_count=data_query_count
+        )
     
     async def calculate_sub_partitions(
         self,

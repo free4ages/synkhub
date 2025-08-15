@@ -40,7 +40,8 @@ export interface RunSummary {
   end_time?: string;
   status: string;
   duration_seconds?: number;
-  rows_processed: number;
+  rows_fetched: number;
+  rows_detected: number;
   rows_inserted: number;
   rows_updated: number;
   rows_deleted: number;
@@ -57,7 +58,8 @@ export interface RunDetail {
   end_time?: string;
   status: string;
   duration_seconds?: number;
-  rows_processed: number;
+  rows_fetched: number;
+  rows_detected: number;
   rows_inserted: number;
   rows_updated: number;
   rows_deleted: number;

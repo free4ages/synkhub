@@ -311,7 +311,8 @@ class JobRunMetrics:
     start_time: datetime
     end_time: Optional[datetime] = None
     status: str = "running"  # running, completed, failed
-    rows_processed: int = 0
+    rows_fetched: int = 0
+    rows_detected: int = 0
     rows_inserted: int = 0
     rows_updated: int = 0
     rows_deleted: int = 0

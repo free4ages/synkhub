@@ -205,14 +205,25 @@ export const RunDetailPage: React.FC = () => {
             <CardContent>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="text-center p-3 bg-primary-50 rounded-lg">
-                    <div className="text-2xl font-bold text-primary-600">
-                      {run.rows_processed.toLocaleString()}
+                  <div className="text-center p-3 bg-blue-50 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-600">
+                      {run.rows_fetched.toLocaleString()}
                     </div>
-                    <div className="text-xs text-primary-700 font-medium">
-                      Rows Processed
+                    <div className="text-xs text-blue-700 font-medium">
+                      Rows Fetched
                     </div>
                   </div>
+                  <div className="text-center p-3 bg-indigo-50 rounded-lg">
+                    <div className="text-2xl font-bold text-indigo-600">
+                      {run.rows_detected.toLocaleString()}
+                    </div>
+                    <div className="text-xs text-indigo-700 font-medium">
+                      Rows Detected
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 gap-4">
                   <div className="text-center p-3 bg-success-50 rounded-lg">
                     <div className="text-2xl font-bold text-success-600">
                       {run.rows_inserted.toLocaleString()}

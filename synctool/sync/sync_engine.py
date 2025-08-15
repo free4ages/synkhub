@@ -15,6 +15,8 @@ from ..core.provider import Provider
 from ..core.column_mapper import ColumnMapper
 from ..utils.partition_generator import PartitionConfig, PartitionGenerator, add_exclusive_range
 from ..utils.hash_calculator import HashCalculator
+from ..utils.sync_result_builder import SyncResultBuilder
+from ..utils.progress_manager import ProgressManager
 from ..enrichment.enrichment_engine import EnrichmentEngine
 from ..sync.partition_processor import PartitionProcessor
 from ..core.schema_models import UniversalDataType
@@ -108,43 +110,33 @@ class SyncEngine:
             self.progress.start_time = datetime.now()
             self.logger.info(f"Starting sync job: {self.config.name}")
             
+            # Create progress manager for centralized progress handling
+            progress_manager = ProgressManager(
+                progress=self.progress,
+                metrics_collector=self.metrics_collector,
+                progress_callback=progress_callback,
+                logger=self.logger
+            )
+            
             # Determine sync strategy
             sync_strategy, strategy_config = await self._determine_strategy(strategy_name, start, end)
             self.logger.info(f"Using sync strategy: {sync_strategy.value}")
             
-            # Update metrics if collector is available
-            if self.metrics_collector:
-                self.metrics_collector.update_progress(
-                    rows_detected=0,
-                    rows_fetched=0,
-                    rows_inserted=0,
-                    rows_updated=0,
-                    rows_deleted=0,
-                    partition_count=0,
-                    successful_partitions=0,
-                    failed_partitions=0
-                )
+            # Initialize metrics
+            progress_manager.update_progress()
             
             # Get sync bounds
             sync_start, sync_end = await self._get_sync_bounds(sync_strategy, strategy_config, start, end)
             if sync_start == sync_end:
                 self.logger.info(f"Sync bounds are the same, no partitions to process")
-                return {
-                    'job_name': self.config.name,
-                    'status': 'completed',
-                    'total_partitions': 0,
-                    'successful_partitions': 0,
-                    'failed_partitions': 0,
-                    'total_rows_detected': 0,
-                    'total_rows_fetched': 0,
-                    'total_rows_inserted': 0,
-                    'total_rows_updated': 0,
-                    'total_rows_deleted': 0,
-                    'total_hash_query_count': 0,
-                    'total_data_query_count': 0,
-                    'duration': f"{(datetime.now() - self.progress.start_time).total_seconds()} seconds",
-                    'partition_results': []
-                }
+                return SyncResultBuilder.build_success_result(
+                    job_name=self.config.name,
+                    strategy=sync_strategy,
+                    progress=self.progress,
+                    partitions_count=0,
+                    partition_results=[],
+                    start_time=self.progress.start_time
+                )
             sync_end = add_exclusive_range(sync_end)
             self.logger.info(f"Sync bounds: {sync_start} to {sync_end}")
             
@@ -166,72 +158,56 @@ class SyncEngine:
                 raise ValueError("Sync bounds are not set")
 
             
-            self.progress.total_partitions = len(partitions)
+            progress_manager.set_total_partitions(len(partitions))
             self.logger.info(f"Processing {len(partitions)} partitions")
             
             # Process partitions with controlled concurrency
             results: list[dict[str, Any]] = await self._process_partitions_concurrent(
-                partitions, sync_strategy, strategy_config, progress_callback
+                partitions, sync_strategy, strategy_config, progress_manager
             )
  
             
-            sync_result = {
-                'job_name': self.config.name,
-                'strategy': sync_strategy.value,
-                'total_partitions': len(partitions),
-                'successful_partitions': self.progress.completed_partitions,
-                'failed_partitions': self.progress.failed_partitions,
-                'total_rows_detected': self.progress.rows_detected,
-                'total_rows_fetched': self.progress.rows_fetched,
-                'total_rows_inserted': self.progress.rows_inserted,
-                'total_rows_updated': self.progress.rows_updated,
-                'total_rows_deleted': self.progress.rows_deleted,
-                'total_hash_query_count': self.progress.hash_query_count,
-                'total_data_query_count': self.progress.data_query_count,
-                'duration': f"{(datetime.now() - self.progress.start_time).total_seconds()} seconds",
-                'partition_results': results
-            }
+            # Build success result using centralized builder
+            sync_result = SyncResultBuilder.build_success_result(
+                job_name=self.config.name,
+                strategy=sync_strategy,
+                progress=self.progress,
+                partitions_count=len(partitions),
+                partition_results=results,
+                start_time=self.progress.start_time
+            )
             
-            # Update final metrics
-            if self.metrics_collector:
-                self.metrics_collector.update_progress(
-                    rows_detected=self.progress.rows_detected,
-                    rows_fetched=self.progress.rows_fetched,
-                    rows_inserted=self.progress.rows_inserted,
-                    rows_updated=self.progress.rows_updated,
-                    rows_deleted=self.progress.rows_deleted,
-                    partition_count=len(partitions),
-                    successful_partitions=self.progress.completed_partitions,
-                    failed_partitions=self.progress.failed_partitions
-                )
+            # Finalize metrics
+            progress_manager.finalize_metrics(len(partitions))
             
-            self.logger.info(f"Sync job completed: {sync_result['duration']}")
+            progress_manager.log_completion(sync_result['duration'])
             return sync_result
             
         except Exception as e:
             import traceback
             self.logger.error(f"Sync job failed: {traceback.format_exc()}")
-            return {
-                'job_name': self.config.name,
-                'status': 'failed',
-                'error': str(e),
-                'total_partitions': 0,
-                'successful_partitions': 0,
-                'failed_partitions': 1,
-                'total_rows_detected': 0,
-                'total_rows_inserted': 0,
-                'total_rows_updated': 0,
-                'total_rows_deleted': 0,
-                'duration': f"{(datetime.now() - self.progress.start_time).total_seconds()} seconds" if self.progress.start_time else "0 seconds",
-                'partition_results': []
-            }
+            
+            # Build failure result using centralized builder
+            strategy_for_error = None
+            try:
+                strategy_for_error = sync_strategy
+            except NameError:
+                pass
+            
+            return SyncResultBuilder.build_failure_result(
+                job_name=self.config.name,
+                error=str(e),
+                progress=self.progress,
+                start_time=self.progress.start_time,
+                strategy=strategy_for_error
+            )
         finally:
             await self.cleanup()
     
     async def _process_partitions_concurrent(self, partitions: List[Partition], 
                                            strategy: SyncStrategy,
                                            strategy_config: Optional[StrategyConfig],
-                                           progress_callback: Optional[Callable[[SyncProgress], None]] = None) -> List[Dict[str, Any]]:
+                                           progress_manager: ProgressManager) -> List[Dict[str, Any]]:
         """Process partitions with controlled concurrency"""
         results: list[dict[str, Any]] = []
         semaphore = asyncio.Semaphore(self.config.max_concurrent_partitions)
@@ -245,34 +221,20 @@ class SyncEngine:
                     processor: 'PartitionProcessor' = PartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
                     result: dict[str, Any] = await processor.process()
                     results.append(result)
-                    # Update progress to mirror concurrent path
-                    self.progress.update_progress(
-                        rows_detected=result.get('rows_detected', 0),
-                        rows_fetched=result.get('rows_fetched', 0),
-                        rows_inserted=result.get('rows_inserted', 0),
-                        rows_updated=result.get('rows_updated', 0),
-                        rows_deleted=result.get('rows_deleted', 0),
-                        hash_query_count=result.get('hash_query_count', 0),
-                        data_query_count=result.get('data_query_count', 0),
-                        completed=True
-                    )
-                    if progress_callback:
-                        progress_callback(self.progress)
+                    # Update progress using progress manager
+                    progress_manager.update_from_partition_result(result, completed=True)
                 except Exception as e:
-                    raise e
                     self.logger.error(f"Partition {partition.partition_id} failed: {str(e)}")
-                    self.progress.update_progress(failed=True)
-                    if progress_callback:
-                        progress_callback(self.progress)
-                    results.append({
-                        'partition_id': partition.partition_id,
-                        'status': 'failed',
-                        'error': str(e),
-                        'rows_processed': 0,
-                        'rows_inserted': 0,
-                        'rows_updated': 0,
-                        'rows_fetched': 0
-                    })
+                    progress_manager.update_progress(failed=True)
+                    
+                    # Build failure result using centralized builder
+                    failure_result = SyncResultBuilder.build_partition_failure_result(
+                        partition_id=partition.partition_id,
+                        error=str(e),
+                        strategy=strategy
+                    )
+                    results.append(failure_result)
+                    raise e
             return results
         
         async def process_partition_with_semaphore(partition: Partition) -> Dict[str, Any]:
@@ -284,40 +246,21 @@ class SyncEngine:
                     processor = PartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
                     result = await processor.process()
                     
-                    # Update progress
-                    self.progress.update_progress(
-                        rows_detected=result.get('rows_detected', 0),
-                        rows_fetched=result.get('rows_fetched', 0),
-                        rows_inserted=result.get('rows_inserted', 0),
-                        rows_updated=result.get('rows_updated', 0),
-                        rows_deleted=result.get('rows_deleted', 0),
-                        hash_query_count=result.get('hash_query_count', 0),
-                        data_query_count=result.get('data_query_count', 0),
-                        completed=True
-                    )
-                    
-                    # Call progress callback if provided
-                    if progress_callback:
-                        progress_callback(self.progress)
+                    # Update progress using progress manager
+                    progress_manager.update_from_partition_result(result, completed=True)
                     
                     return result
                     
                 except Exception as e:
                     self.logger.error(f"Partition {partition.partition_id} failed: {str(e)}\nStacktrace:\n{traceback.format_exc()}")
-                    self.progress.update_progress(failed=True)
+                    progress_manager.update_progress(failed=True)
                     
-                    if progress_callback:
-                        progress_callback(self.progress)
-                    
-                    return {
-                        'partition_id': partition.partition_id,
-                        'status': 'failed',
-                        'error': str(e),
-                        'rows_processed': 0,
-                        'rows_inserted': 0,
-                        'rows_updated': 0,
-                        'rows_fetched': 0
-                    }
+                    # Build failure result using centralized builder
+                    return SyncResultBuilder.build_partition_failure_result(
+                        partition_id=partition.partition_id,
+                        error=str(e),
+                        strategy=strategy
+                    )
         
         # Process partitions in batches
         batch_size = self.config.max_concurrent_partitions*2

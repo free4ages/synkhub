@@ -251,7 +251,7 @@ export const Dashboard: React.FC = () => {
                         </div>
                         <div className="flex items-center">
                           <Users className="h-3 w-3 mr-1" />
-                          {run.rows_processed.toLocaleString()} rows
+                          {run.rows_detected.toLocaleString()} rows detected
                         </div>
                       </div>
                     </div>

@@ -49,7 +49,8 @@ class RunSummary(BaseModel):
     end_time: Optional[datetime] = None
     status: str
     duration_seconds: Optional[float] = None
-    rows_processed: int = 0
+    rows_fetched: int = 0
+    rows_detected: int = 0
     rows_inserted: int = 0
     rows_updated: int = 0
     rows_deleted: int = 0
@@ -67,7 +68,8 @@ class RunDetail(BaseModel):
     end_time: Optional[datetime] = None
     status: str
     duration_seconds: Optional[float] = None
-    rows_processed: int = 0
+    rows_fetched: int = 0
+    rows_detected: int = 0
     rows_inserted: int = 0
     rows_updated: int = 0
     rows_deleted: int = 0
