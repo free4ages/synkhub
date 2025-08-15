@@ -50,6 +50,8 @@ class PartitionProcessor:
     async def _process_full_sync(self) -> Dict[str, Any]:
         """Process full sync for partition with pagination and subpartitioning"""
         rows_inserted = 0
+        rows_fetched = 0
+        rows_detected = 0
         page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
 
         if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
@@ -80,7 +82,6 @@ class PartitionProcessor:
             current_num += 1
             sub_partition_rows = 0
             offset = 0
-            
             while True:
                 self.logger.info(f"Processing sub partition({current_num}/{len(sub_partitions)}) {sub_partition.partition_id} from {sub_partition.start} to {sub_partition.end} with page_size {page_size} and offset {offset}")
                 # Fetch paginated data from source
@@ -106,6 +107,8 @@ class PartitionProcessor:
                 
                 sub_partition_rows += len(data)
                 rows_inserted += len(data)
+                rows_fetched += len(data)
+                rows_detected += len(data)
                 if not use_pagination:
                     break
 
@@ -121,7 +124,8 @@ class PartitionProcessor:
         return {
             'partition_id': self.partition.partition_id,
             'strategy': 'full',
-            'rows_detected': rows_inserted,
+            'rows_detected': rows_detected,
+            'rows_fetched': rows_fetched,
             'rows_inserted': rows_inserted,
             'rows_updated': 0,
             'rows_deleted': 0,
@@ -134,6 +138,7 @@ class PartitionProcessor:
     async def _process_delta_sync(self) -> Dict[str, Any]:
         """Process delta sync for partition with pagination and subpartitioning"""
         rows_inserted = 0
+        rows_fetched = 0
         page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
 
         if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
@@ -184,6 +189,7 @@ class PartitionProcessor:
                 
                 sub_partition_rows += r_inserted
                 rows_inserted += r_inserted
+                rows_fetched += len(data)
                 if not use_pagination:
                     break
                 
@@ -197,6 +203,7 @@ class PartitionProcessor:
             'partition_id': self.partition.partition_id,
             'strategy': 'delta',
             'rows_detected': rows_inserted,
+            'rows_fetched': rows_fetched,
             'rows_inserted': rows_inserted,
             'rows_updated': 0,
             'rows_deleted': 0,
@@ -236,6 +243,7 @@ class PartitionProcessor:
                     data = await self.sync_engine.enrichment_engine.enrich(data)
                 r_inserted = await self.sync_engine.destination_provider.insert_partition_data(data, partition, upsert=True)
                 rows_inserted += len(data)
+                rows_fetched += len(data)
                 data_query_count += 1
             elif status == DataStatus.DELETED:
                 r_deleted = await self.sync_engine.destination_provider.delete_partition_data(partition)
@@ -245,6 +253,8 @@ class PartitionProcessor:
                     src_hashes, src_hash_has_data = await self.sync_engine.source_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo)
                     dest_hashes, dest_hash_has_data = await self.sync_engine.destination_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo)
                     hash_query_count += 1
+                    if src_hash_has_data:
+                        rows_fetched += len(src_hashes)
                     # find changed rows by comparing src_hashes and dest_hashes using unique_keys
                     # if src_hash_has_data, it means the data format belons to data backend, otherwise it belongs to state backend
 
@@ -286,11 +296,13 @@ class PartitionProcessor:
                     # if status == DataStatus.ADDED:
                     r_inserted = await self.sync_engine.destination_provider.insert_partition_data(data, partition,column_keys=self.get_destination_columns(), upsert=True)
                     rows_inserted += len(data)
+                    rows_fetched += len(data)
                 
         return {
             'partition_id': self.partition.partition_id,
             'strategy': self.strategy.value,
             'rows_detected': rows_detected,
+            'rows_fetched': rows_fetched,
             'rows_inserted': rows_inserted,
             'rows_updated': rows_updated,
             'rows_deleted': rows_deleted,

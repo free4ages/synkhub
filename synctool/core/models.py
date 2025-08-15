@@ -192,6 +192,7 @@ class SyncProgress:
     total_partitions: int = 0
     completed_partitions: int = 0
     failed_partitions: int = 0
+    rows_fetched: int = 0   # Total rows fetched from the source
     rows_detected: int = 0    # Total rows detected in the partition
     rows_inserted: int = 0    # Total rows inserted in the partition
     rows_updated: int = 0    # Total rows updated in the partition
@@ -204,6 +205,7 @@ class SyncProgress:
         completed: bool = False, 
         failed: bool = False, 
         rows_detected: int = 0, 
+        rows_fetched: int = 0,
         rows_inserted: int = 0, 
         rows_updated: int = 0, 
         rows_deleted: int = 0,
@@ -218,6 +220,7 @@ class SyncProgress:
         self.rows_inserted += rows_inserted
         self.rows_updated += rows_updated
         self.rows_deleted += rows_deleted
+        self.rows_fetched += rows_fetched
         self.hash_query_count += hash_query_count
         self.data_query_count += data_query_count
 

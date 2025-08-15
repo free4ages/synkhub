@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
+from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pathlib import Path
 
@@ -101,8 +102,8 @@ async def get_job_detail(
             partition_step=job_config.partition_step,
             max_concurrent_partitions=job_config.max_concurrent_partitions,
             strategies=strategy_details,
-            source_config=job_config.source_provider,
-            destination_config=job_config.destination_provider,
+            source_config=asdict(job_config.source_provider),
+            destination_config=asdict(job_config.destination_provider),
             column_mappings=job_config.column_map
         )
         

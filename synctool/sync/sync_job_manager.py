@@ -90,7 +90,11 @@ class SyncJobManager:
                 # Update metrics if collector is available
                 if metrics_collector:
                     metrics_collector.update_progress(
-                        rows_processed=progress.rows_detected,
+                        rows_detected=progress.rows_detected,
+                        rows_fetched=progress.rows_fetched,
+                        rows_inserted=progress.rows_inserted,
+                        rows_updated=progress.rows_updated,
+                        rows_deleted=progress.rows_deleted,
                         partition_count=progress.total_partitions,
                         successful_partitions=progress.completed_partitions,
                         failed_partitions=progress.failed_partitions
@@ -111,7 +115,8 @@ class SyncJobManager:
             # Update final metrics
             if metrics_collector:
                 metrics_collector.update_progress(
-                    rows_processed=result.get('total_rows_detected', 0),
+                    rows_detected=result.get('total_rows_detected', 0),
+                    rows_fetched=result.get('total_rows_fetched', 0),
                     rows_inserted=result.get('total_rows_inserted', 0),
                     rows_updated=result.get('total_rows_updated', 0),
                     rows_deleted=result.get('total_rows_deleted', 0),

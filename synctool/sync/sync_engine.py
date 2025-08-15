@@ -115,7 +115,11 @@ class SyncEngine:
             # Update metrics if collector is available
             if self.metrics_collector:
                 self.metrics_collector.update_progress(
-                    rows_processed=0,
+                    rows_detected=0,
+                    rows_fetched=0,
+                    rows_inserted=0,
+                    rows_updated=0,
+                    rows_deleted=0,
                     partition_count=0,
                     successful_partitions=0,
                     failed_partitions=0
@@ -132,6 +136,7 @@ class SyncEngine:
                     'successful_partitions': 0,
                     'failed_partitions': 0,
                     'total_rows_detected': 0,
+                    'total_rows_fetched': 0,
                     'total_rows_inserted': 0,
                     'total_rows_updated': 0,
                     'total_rows_deleted': 0,
@@ -177,6 +182,7 @@ class SyncEngine:
                 'successful_partitions': self.progress.completed_partitions,
                 'failed_partitions': self.progress.failed_partitions,
                 'total_rows_detected': self.progress.rows_detected,
+                'total_rows_fetched': self.progress.rows_fetched,
                 'total_rows_inserted': self.progress.rows_inserted,
                 'total_rows_updated': self.progress.rows_updated,
                 'total_rows_deleted': self.progress.rows_deleted,
@@ -189,7 +195,8 @@ class SyncEngine:
             # Update final metrics
             if self.metrics_collector:
                 self.metrics_collector.update_progress(
-                    rows_processed=self.progress.rows_detected,
+                    rows_detected=self.progress.rows_detected,
+                    rows_fetched=self.progress.rows_fetched,
                     rows_inserted=self.progress.rows_inserted,
                     rows_updated=self.progress.rows_updated,
                     rows_deleted=self.progress.rows_deleted,
@@ -241,6 +248,7 @@ class SyncEngine:
                     # Update progress to mirror concurrent path
                     self.progress.update_progress(
                         rows_detected=result.get('rows_detected', 0),
+                        rows_fetched=result.get('rows_fetched', 0),
                         rows_inserted=result.get('rows_inserted', 0),
                         rows_updated=result.get('rows_updated', 0),
                         rows_deleted=result.get('rows_deleted', 0),
@@ -262,7 +270,8 @@ class SyncEngine:
                         'error': str(e),
                         'rows_processed': 0,
                         'rows_inserted': 0,
-                        'rows_updated': 0
+                        'rows_updated': 0,
+                        'rows_fetched': 0
                     })
             return results
         
@@ -278,6 +287,7 @@ class SyncEngine:
                     # Update progress
                     self.progress.update_progress(
                         rows_detected=result.get('rows_detected', 0),
+                        rows_fetched=result.get('rows_fetched', 0),
                         rows_inserted=result.get('rows_inserted', 0),
                         rows_updated=result.get('rows_updated', 0),
                         rows_deleted=result.get('rows_deleted', 0),
@@ -305,7 +315,8 @@ class SyncEngine:
                         'error': str(e),
                         'rows_processed': 0,
                         'rows_inserted': 0,
-                        'rows_updated': 0
+                        'rows_updated': 0,
+                        'rows_fetched': 0
                     }
         
         # Process partitions in batches
@@ -324,6 +335,7 @@ class SyncEngine:
                         'status': 'failed',
                         'error': str(batch_result),
                         'rows_detected': 0,
+                        'rows_fetched': 0,
                         'rows_inserted': 0,
                         'rows_updated': 0,
                         'rows_deleted': 0,
