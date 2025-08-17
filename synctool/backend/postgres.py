@@ -13,6 +13,7 @@ from ..backend.base_backend import SqlBackend
 from ..core.models import Partition, BackendConfig, Column
 from ..core.column_mapper import ColumnSchema
 from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
+from ..utils.hash_cache import HashCache
 
 
 MAX_PG_PARAMS = 31000
@@ -27,6 +28,7 @@ class PostgresBackend(SqlBackend):
     def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
         super().__init__(config, column_schema, logger=logger, data_storage=data_storage)
         self._connection = None
+        self.hash_cache = HashCache(max_size=500)
     
     def _get_default_schema(self) -> str:
         return 'public'
@@ -106,6 +108,8 @@ class PostgresBackend(SqlBackend):
         min_val, max_val = result[0]['min_val'], result[0]['max_val']
         return min_val, max_val
 
+    
+
     async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         if page_size is not None or offset is not None:
@@ -133,16 +137,62 @@ class PostgresBackend(SqlBackend):
     
     async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
-        return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo)
+        # Use HashCache for optimized fetching
+        return await self.hash_cache.fetch_partition_row_hashes(partition, hash_algo, self)
     
     async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch hashes based on partition bounds"""
-        # query = self._build_partition_data_query(partition, partition_column=self.column_mapping.delta_key, with_hash=with_hash, hash_algo=hash_algo)
+        """Fetch child partition hashes"""
+        # Use HashCache for optimized fetching
+        if partition is None:
+            raise ValueError("Partition is required for hash cache operations")
+        
+        if not self.column_schema:
+            raise ValueError("Column schema is required for hash cache operations")
+        
+        # Get necessary parameters for cache
+        unique_keys = [col.name for col in self.column_schema.unique_keys] if self.column_schema.unique_keys else []
+        order_keys = [col.name for col, _ in self.column_schema.order_keys] if self.column_schema.order_keys else []
+        query: Query = self._build_partition_hash_query(partition, hash_algo)
+        
+        return await self.hash_cache.fetch_child_partition_hashes(
+            partition, query, unique_keys, order_keys, hash_algo, self
+        )
+    
+    async def _fetch_child_partition_hashes_direct(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+        """Direct database fetch for child partition hashes - used by HashCache"""
         query: Query = self._build_partition_hash_query(partition, hash_algo)
         query = self._rewrite_query(query)
         sql, params = self._build_sql(query)
-        # print(sql, params)
         return await self.execute_query(sql, params)
+    
+    async def _fetch_partition_row_hashes_direct(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+        """Direct database fetch for partition row hashes - used by HashCache"""
+        return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo)
+    
+    def mark_partition_complete(self, partition_id: str):
+        """Mark partition as complete and evict from cache"""
+        self.hash_cache.mark_partition_complete(partition_id)
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get hash cache statistics"""
+        return self.hash_cache.get_cache_stats()
+    
+    def clear_cache(self):
+        """Clear the hash cache"""
+        self.hash_cache.clear_cache()
+    
+    async def fetch_row_hashes(self, unique_key_values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fetch row hashes for specific unique key values from cache if possible"""
+        if not self.column_schema:
+            return []
+        
+        unique_keys = [col.name for col in self.column_schema.unique_keys] if self.column_schema.unique_keys else []
+        partition_column = self.column_schema.partition_key.name if self.column_schema.partition_key else ""
+        partition_column_type = str(self.column_schema.partition_key.dtype) if self.column_schema.partition_key else ""
+        
+        # This would need intervals from the partition context - for now return empty
+        # In practice, this would be called with proper context from partition processor
+        return []
     
     async def delete_partition_data(self, partition: Partition) -> int:
         """Delete partition data from destination"""

@@ -346,7 +346,7 @@ class SqlBackend(Backend):
             final.append(self.column_schema.transform_data(d))
         return final
     
-    def _build_partition_data_query(self, partition: Partition, partition_column=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
+    def _build_partition_data_query(self, partition: Partition, partition_column=None, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
         filters = self._build_filter_query()
         if not self.column_schema or not self.column_schema.partition_key:
             raise ValueError("No partition key configured in column schema")
@@ -362,7 +362,7 @@ class SqlBackend(Backend):
         limit = page_size if page_size is not None else None
 
         return Query(
-            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
+            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns),
             table= self._build_table_query(),
             joins= self._build_join_query(),
             filters= filters,
@@ -372,12 +372,14 @@ class SqlBackend(Backend):
         )
     
     
-    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH):
+    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None):
         select = []
         if not self.column_schema:
             raise ValueError("No column schema configured")
         
-        for col in self.column_schema.columns_to_fetch():
+        columns_to_fetch = columns or self.column_schema.columns_to_fetch()
+        
+        for col in columns_to_fetch:
             select.append(Field(expr=col.expr or col.name, alias=col.name))
         
         if with_hash:
