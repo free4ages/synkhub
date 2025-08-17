@@ -1,7 +1,7 @@
 from synctool.utils.sql_builder import SqlBuilder
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any, Tuple, Union
+from typing import Dict, List, Optional, Any, Tuple, Union, Set
 from datetime import timedelta, datetime, date, time
 from enum import Enum
 from dataclasses import dataclass
@@ -13,7 +13,7 @@ import logging
 from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
 from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column, DataStorage
 from ..core.column_mapper import ColumnSchema  # Add this import
-from ..core.enums import HashAlgo, BackendType
+from ..core.enums import HashAlgo, BackendType, Capability
 from ..core.decorators import async_retry
 from ..core.schema_models import UniversalSchema, UniversalDataType
 from ..utils.schema_utils import cast_value
@@ -23,6 +23,75 @@ from ..utils.schema_utils import cast_value
 
 class BaseBackend(ABC):
     """Base backend class for data and state operations"""
+    
+    # Class-level capabilities - these ADD to upstream capabilities, don't replace them
+    _capabilities: Optional[Set[Capability]] = None
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Simple instance-level caches - no locking needed since instance is created once
+        self._computed_capabilities: Optional[Set[Capability]] = None
+        self._capability_lookup: Optional[Dict[Capability, bool]] = None
+    
+    def get_capabilities(self) -> Set[Capability]:
+        """
+        Get all capabilities for this backend with simple caching.
+        
+        Since backend instance is created once per run, we can use simple caching
+        without thread safety concerns.
+        """
+        if self._computed_capabilities is None:
+            from ..core.capabilities import get_storage_capabilities
+            
+            all_capabilities = set()
+            
+            # 1. Start with storage type default capabilities (base level)
+            storage_type = getattr(self.config, 'type', 'unknown')
+            all_capabilities.update(get_storage_capabilities(storage_type))
+            
+            # 2. Add DataStore capabilities (if available)
+            if hasattr(self, '_datastore') and self._datastore:
+                datastore_caps = self._datastore.get_capabilities()
+                all_capabilities.update(datastore_caps)
+            
+            # 3. Add backend class-level capabilities (most specific)
+            if self._capabilities is not None:
+                all_capabilities.update(self._capabilities)
+            
+            # Cache the computed capabilities
+            self._computed_capabilities = all_capabilities
+            
+            # Pre-build lookup dictionary for O(1) has_capability checks
+            self._capability_lookup = {cap: True for cap in all_capabilities}
+        
+        return self._computed_capabilities.copy()
+    
+    def has_capability(self, capability: Capability) -> bool:
+        """
+        Ultra-fast capability check optimized for multiple calls within a single run.
+        
+        Uses pre-computed dictionary lookup for O(1) performance.
+        No thread safety overhead since backend instance is created once per run.
+        
+        Usage:
+            can_fetch_hash_with_data = self.data_backend.has_capability(Capability.FETCH_HASH_WITH_DATA)
+        """
+        # Ensure capabilities are computed and cached
+        if self._capability_lookup is None:
+            self.get_capabilities()  # This populates both caches
+        
+        # O(1) dictionary lookup - fastest possible
+        return self._capability_lookup.get(capability, False)
+    
+    def require_capability(self, capability: Capability) -> None:
+        """Raise an exception if the backend doesn't have the required capability"""
+        if not self.has_capability(capability):
+            backend_type = getattr(self.config, 'type', 'unknown')
+            available_caps = [cap.value for cap in self.get_capabilities()]
+            raise ValueError(
+                f"Backend '{backend_type}' does not support capability: {capability.value}. "
+                f"Available capabilities: {available_caps}"
+            )
     
     def _get_full_table_name(self, tablename: Optional[str] = None)-> str:
         tablename = tablename or self.table
@@ -126,12 +195,16 @@ class Backend(BaseBackend):
             if data_storage:
                 logger.info(f"Available datastores: {list(data_storage.datastores.keys())}")
         
+        # Store reference to datastore for capability checking
+        self._datastore = None
+        
         # Resolve datastore_name to connection config
         if hasattr(config, 'datastore_name') and config.datastore_name and data_storage:
             datastore = data_storage.get_datastore(config.datastore_name)
             if not datastore:
                 raise ValueError(f"Datastore '{config.datastore_name}' not found in DataStorage")
             self.connection_config = datastore.connection
+            self._datastore = datastore  # Store for capability checking
             if logger:
                 logger.info(f"Using datastore '{config.datastore_name}' connection config")
         else:
@@ -156,6 +229,9 @@ class Backend(BaseBackend):
         self.logger = logging.getLogger(logger_name)
         self._connection_pool = None
         self._lock = asyncio.Lock()
+        
+        # Initialize capability caching from BaseBackend
+        super().__init__()
     
     async def __aenter__(self):
         await self.connect()

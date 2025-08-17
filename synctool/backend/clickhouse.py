@@ -3,10 +3,10 @@ import asyncio
 import json
 import math
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 from synctool.core.models import StrategyConfig, BackendConfig, DataStorage
-from synctool.core.enums import HashAlgo
+from synctool.core.enums import HashAlgo, Capability
 from synctool.core.query_models import Query, Field, Filter, BlockHashMeta, BlockNameMeta, RowHashMeta
 from synctool.utils.sql_builder import SqlBuilder
 from .base_backend import SqlBackend
@@ -48,6 +48,21 @@ class ClickHouseBackend(SqlBackend):
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_kwargs = session_kwargs or {}
         self.logger = logger
+    
+    def get_capabilities(self) -> Set[Capability]:
+        """Override to handle ClickHouse-specific capability logic"""
+        if self._computed_capabilities is None:
+            # Get base capabilities
+            capabilities = super().get_capabilities()
+            
+            # ClickHouse doesn't support traditional UPSERT, so remove it
+            capabilities.discard(Capability.UPSERT_SUPPORT)
+            
+            # Update caches
+            self._computed_capabilities = capabilities
+            self._capability_lookup = {cap: True for cap in capabilities}
+        
+        return self._computed_capabilities.copy()
 
     async def connect(self):
         if self._session is None:

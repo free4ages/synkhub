@@ -20,6 +20,7 @@ from ..utils.progress_manager import ProgressManager
 from ..enrichment.enrichment_engine import EnrichmentEngine
 from ..sync.partition_processor import PartitionProcessor
 from ..core.schema_models import UniversalDataType
+from ..core.column_mapper import ColumnSchema
 
 class SyncEngine:
     """Main sync engine that orchestrates the sync process"""
@@ -83,14 +84,20 @@ class SyncEngine:
         # Create providers with appropriate ColumnSchema for both data and state
         self.source_provider = await self._create_provider(
             self.config.source_provider, 
-            data_column_schema=column_mapper.schemas.get("source"),
-            state_column_schema=column_mapper.schemas.get("source_state"),
+            column_schemas={
+                "common": column_mapper.schemas.get("common"),
+                "data": column_mapper.schemas.get("source"),
+                "state": column_mapper.schemas.get("source_state")
+            },
             role="source"
         )
         self.destination_provider = await self._create_provider(
             self.config.destination_provider, 
-            data_column_schema=column_mapper.schemas.get("destination"),
-            state_column_schema=column_mapper.schemas.get("destination_state"),
+            column_schemas={
+                "common": column_mapper.schemas.get("common"),
+                "data": column_mapper.schemas.get("destination"),
+                "state": column_mapper.schemas.get("destination_state")
+            },
             role="destination"
         )
         
@@ -346,7 +353,7 @@ class SyncEngine:
 
         return await self.source_provider.get_partition_bounds()
     
-    async def _create_provider(self, provider_config: ProviderConfig, data_column_schema=None, state_column_schema=None, role=None) -> Provider:
+    async def _create_provider(self, provider_config: ProviderConfig, column_schemas: Dict[str, ColumnSchema]=None, role=None) -> Provider:
         """Factory method to create providers with ColumnSchema for both data and state"""
         # Convert ProviderConfig to dictionary format that Provider expects
         config = {
@@ -355,7 +362,7 @@ class SyncEngine:
         }
         
         # Create provider with column schemas for both data and state backends
-        provider = Provider(config, data_column_schema=data_column_schema, state_column_schema=state_column_schema, role=role, logger=self.logger, data_storage=self.data_storage)
+        provider = Provider(config, column_schemas=column_schemas, role=role, logger=self.logger, data_storage=self.data_storage)
         await provider.connect()
         return provider
     

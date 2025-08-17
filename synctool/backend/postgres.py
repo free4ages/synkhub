@@ -6,7 +6,7 @@ from typing import Any, List, Optional, Dict, Tuple
 
 from ..core.models import StrategyConfig
 from ..core.models import BackendConfig, DataStorage
-from ..core.enums import HashAlgo
+from ..core.enums import HashAlgo, Capability
 from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
 from ..utils.sql_builder import SqlBuilder
 from ..backend.base_backend import SqlBackend
@@ -19,6 +19,10 @@ MAX_PG_PARAMS = 31000
 
 class PostgresBackend(SqlBackend):
     """PostgreSQL implementation of Backend"""
+    
+    # PostgreSQL-specific capabilities beyond storage type defaults
+    _capabilities = {
+    }
     
     def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
         super().__init__(config, column_schema, logger=logger, data_storage=data_storage)

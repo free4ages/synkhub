@@ -252,8 +252,8 @@ class PartitionProcessor:
                 rows_deleted += partition.num_rows
             elif status == DataStatus.MODIFIED:
                 if self.strategy_config.prevent_update_unless_changed:
-                    src_hashes, src_hash_has_data = await self.sync_engine.source_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo,with_data=None)
-                    dest_hashes, dest_hash_has_data = await self.sync_engine.destination_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_alg, with_data=False)
+                    src_hashes = await self.sync_engine.source_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo)
+                    dest_hashes = await self.sync_engine.destination_provider.fetch_partition_row_hashes(partition, hash_algo=self.sync_engine.hash_algo)
                     hash_query_count += 1
                     if src_hash_has_data:
                         rows_fetched += len(src_hashes)

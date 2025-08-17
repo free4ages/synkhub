@@ -1,9 +1,9 @@
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional, Any, Union, Tuple, Callable
+from typing import Dict, List, Literal, Optional, Any, Union, Tuple, Callable, Set
 from datetime import datetime
-from .enums import HashAlgo, SyncStrategy, PartitionType, BackendType
+from .enums import HashAlgo, SyncStrategy, PartitionType, BackendType, Capability
 from .schema_models import UniversalDataType
 from ..utils.schema_utils import cast_value
 
@@ -36,11 +36,61 @@ class DataStore:
     connection: ConnectionConfig
     description: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    # Custom capabilities that ADD to storage type defaults
+    additional_capabilities: Optional[List[str]] = None
+    # Capabilities to explicitly disable/remove
+    disabled_capabilities: Optional[List[str]] = None
     
     def __post_init__(self):
         # Convert dict to ConnectionConfig if needed
         if isinstance(self.connection, dict):
             self.connection = ConnectionConfig(**self.connection)
+        
+        # Initialize capability caches
+        self._computed_capabilities: Optional[Set[Capability]] = None
+        self._capability_lookup: Optional[Dict[Capability, bool]] = None
+    
+    def get_capabilities(self) -> Set[Capability]:
+        """Get capabilities with simple instance caching"""
+        if self._computed_capabilities is None:
+            from .capabilities import get_storage_capabilities
+            
+            # Start with storage type defaults
+            capabilities = get_storage_capabilities(self.type)
+            
+            # Add any additional capabilities
+            if self.additional_capabilities:
+                for cap_str in self.additional_capabilities:
+                    try:
+                        cap = Capability(cap_str)
+                        capabilities.add(cap)
+                    except ValueError:
+                        # Skip invalid capability strings
+                        pass
+            
+            # Remove any disabled capabilities
+            if self.disabled_capabilities:
+                for cap_str in self.disabled_capabilities:
+                    try:
+                        cap = Capability(cap_str)
+                        capabilities.discard(cap)
+                    except ValueError:
+                        # Skip invalid capability strings
+                        pass
+            
+            # Cache the result
+            self._computed_capabilities = capabilities
+            # Pre-build lookup dictionary for O(1) has_capability checks
+            self._capability_lookup = {cap: True for cap in capabilities}
+        
+        return self._computed_capabilities.copy()
+    
+    def has_capability(self, capability: Capability) -> bool:
+        """Fast capability check with O(1) lookup"""
+        if self._capability_lookup is None:
+            self.get_capabilities()  # Populate caches
+        
+        return self._capability_lookup.get(capability, False)
 
 
 @dataclass  

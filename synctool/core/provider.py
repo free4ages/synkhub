@@ -2,7 +2,7 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from .models import BackendConfig, ProviderConfig, Partition, DataStorage
 from .column_mapper import ColumnSchema  # Add this import
-from .enums import HashAlgo
+from .enums import HashAlgo, Capability
 from ..backend import PostgresBackend, ClickHouseBackend, DuckDBBackend, Backend
 
 logger = logging.getLogger(__name__)
@@ -10,21 +10,23 @@ logger = logging.getLogger(__name__)
 class Provider:
     """Unified Provider class that wraps data and state backends"""
     
-    def __init__(self, config: Dict[str, Any], data_column_schema=None, state_column_schema=None, role=None, logger= None, data_storage: Optional[DataStorage] = None):
+    def __init__(self, config: Dict[str, Any], column_schemas: Dict[str,ColumnSchema]=None, role=None, logger= None, data_storage: Optional[DataStorage] = None):
         data_backend_config = config.get('data_backend', config)
         state_backend_config = config.get('state_backend')
         self.role = role
         self.data_storage = data_storage
+        self.column_schema = column_schemas.get("common")
+
         logger_name = f"{logger.name}.{self.role}.provider" if logger else f"{__name__}.{self.role}.provider"
         self.logger = logging.getLogger(logger_name)
         # Pass column schemas to backends
-        self.data_backend = self._create_backend(data_backend_config, data_column_schema)
+        self.data_backend = self._create_backend(data_backend_config, column_schemas.get("data"))
         self.has_same_backend = True
         
         if state_backend_config:
             self.has_same_backend = False
             # For state backend, pass the state column schema
-            self.state_backend = self._create_backend(state_backend_config, state_column_schema)
+            self.state_backend = self._create_backend(state_backend_config, column_schemas.get("state"))
         else:
             self.state_backend = self.data_backend
 
@@ -193,14 +195,38 @@ class Provider:
         """Delete partition data from destination"""
         return await self.data_backend.delete_partition_data(partition)
     
-    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> Tuple[List[Dict], bool]:
+    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
-        if self.has_same_backend:
-            return await self.data_backend.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo), True
-        else:
-            return await self.state_backend.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo), False
-
-
+        # can_fetch_hash_with_data = self.data_backend.has_capability(Capability.FETCH_HASH_WITH_DATA)
+        # if self.has_same_backend:
+        #     # if data fetching is optional and backend supports it, fetch data along with hashes
+        #     if with_data is True:
+        #         if can_fetch_hash_with_data:
+        #             hashes, has_data = await self.data_backend.fetch_partition_row_hashes(partition, hash_algo=hash_algo, with_data=with_data)
+        #             return hashes, has_data
+        #         else:
+        #             raise ValueError("Backend does not support fetching hash with data")
+        #     elif with_data is False:
+        #         return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo=hash_algo, with_data=with_data)
+        #     else:
+        #         # let backend decide if it wants to fetch data along with hashes
+        #         return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo=hash_algo)
+        # else:
+        #     hashes, has_data = await self.state_backend.fetch_partition_row_hashes(partition, hash_algo=hash_algo, with_data=False)
+        #     if with_data is True:
+        #         # Fetch data separately from data backend if needed
+        #         data = await self.data_backend.fetch_partition_data(partition, with_hash=False, hash_algo=hash_algo)
+        #         unique_keys = self.column_schema.unique_keys
+        #         hash_map = {(h[x.name] for x in unique_keys): h for h in hashes}
+        #         for d in data:
+        #             key = tuple(d[x.name] for x in unique_keys)
+        #             if key in hash_map:
+        #                 d["hash__"] = hash_map[key]["hash__"]
+        #         return data, True
+        #     else:
+        #         return hashes, has_data
+        hashes= await self.state_backend.fetch_partition_row_hashes(partition, hash_algo=hash_algo)
+    
     async def update_data(self, data: List[Dict], unique_keys: List[str]) -> int:
         return await self.data_backend.update_data(data, unique_keys)
     
