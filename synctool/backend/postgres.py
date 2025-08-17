@@ -28,7 +28,9 @@ class PostgresBackend(SqlBackend):
     def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
         super().__init__(config, column_schema, logger=logger, data_storage=data_storage)
         self._connection = None
-        self.hash_cache = HashCache(max_size=500)
+        # Scale up cache size for better performance
+        cache_size = getattr(config, 'cache_size', 5000)
+        self.hash_cache = HashCache(max_size=cache_size)
     
     def _get_default_schema(self) -> str:
         return 'public'
@@ -138,7 +140,8 @@ class PostgresBackend(SqlBackend):
     async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
         # Use HashCache for optimized fetching
-        return await self.hash_cache.fetch_partition_row_hashes(partition, hash_algo, self)
+        fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo)
+        return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo)
     
     async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch child partition hashes"""
@@ -149,13 +152,9 @@ class PostgresBackend(SqlBackend):
         if not self.column_schema:
             raise ValueError("Column schema is required for hash cache operations")
         
-        # Get necessary parameters for cache
-        unique_keys = [col.name for col in self.column_schema.unique_keys] if self.column_schema.unique_keys else []
-        order_keys = [col.name for col, _ in self.column_schema.order_keys] if self.column_schema.order_keys else []
-        query: Query = self._build_partition_hash_query(partition, hash_algo)
-        
+        fallback_fn = lambda: self._fetch_child_partition_hashes_direct(partition, with_hash, hash_algo)
         return await self.hash_cache.fetch_child_partition_hashes(
-            partition, query, unique_keys, order_keys, hash_algo, self
+            partition, self, fallback_fn, hash_algo
         )
     
     async def _fetch_child_partition_hashes_direct(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:

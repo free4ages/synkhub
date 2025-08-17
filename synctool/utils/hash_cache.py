@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Callable
 from collections import OrderedDict
 from dataclasses import dataclass
 import threading
@@ -25,10 +25,15 @@ class CacheEntry:
 class HashCache:
     """Cache backend for partition hash and individual row hash operations"""
     
-    def __init__(self, max_size: int = 500):
-        self.max_size = max_size
+    def __init__(self, max_rows: int = 50000, part_rows_threshold: int = 500):
+        self.max_rows = max_rows
         self.cache: OrderedDict[str, CacheEntry] = OrderedDict()
+        self.part_rows_threshold = part_rows_threshold
         self._lock = threading.RLock()  # Use RLock for potential recursive calls
+        self._total_cached_rows = 0  # Track total rows across all partitions
+        
+        self._cache_hits = 0
+        self._cache_misses = 0
         
     def _is_subpartition(self, partition_id: str, cached_partition_id: str) -> bool:
         """Check if partition_id is a subpartition of cached_partition_id"""
@@ -188,16 +193,16 @@ class HashCache:
         
         return ""
     
-    def _evict_if_needed(self):
-        """Evict oldest entries if cache size exceeds max_size"""
-        while len(self.cache) >= self.max_size:
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-            logger.debug(f"Evicted cache entry for partition {oldest_key}")
+    # def _evict_if_needed(self):
+    #     """Evict oldest entries if total cached rows exceeds max_rows"""
+    #     while self._total_cached_rows >= self.max_rows:
+    #         oldest_key = next(iter(self.cache))
+    #         oldest_entry = self.cache[oldest_key]
+    #         self._total_cached_rows -= oldest_entry.num_rows
+    #         del self.cache[oldest_key]
+    #         logger.debug(f"Evicted cache entry for partition {oldest_key} ({oldest_entry.num_rows} rows)")
     
-    async def fetch_child_partition_hashes(self, partition: Partition, query: Query,
-                                         unique_keys: List[str], order_keys: List[str],
-                                         hash_algo: HashAlgo, backend) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: Partition,backend, fallback_fn: Callable, hash_algo: HashAlgo) -> List[Dict]:
         """
         Fetch child partition hashes, using cache when possible.
         If partition has partition_id and num_rows < 50, cache the row hashes.
@@ -213,6 +218,10 @@ class HashCache:
                         filtered_rows = self._filter_rows_for_subpartition(
                             cached_entry, partition, partition.partition_id
                         )
+                        backend_column_schema = backend.column_schema
+                        unique_keys = [col.expr for col in backend_column_schema.unique_keys] if backend_column_schema.unique_keys else []
+                        order_keys = [col.expr for col, _ in backend_column_schema.order_keys] if backend_column_schema.order_keys else []
+                        
                         
                         # Calculate hash from filtered rows
                         partition_hash = self._calculate_hash_from_cache(
@@ -229,7 +238,7 @@ class HashCache:
                         }]
         
         # Not in cache, fetch from backend directly
-        result = await backend._fetch_child_partition_hashes_direct(partition, with_hash=False, hash_algo=hash_algo)
+        result = await fallback_fn()
         
         # Cache if conditions are met or if num_rows is 0
         should_cache = False
@@ -242,35 +251,45 @@ class HashCache:
         
         if should_cache:
             with self._lock:
-                if len(self.cache) < self.max_size:
-                    try:
-                        # Fetch row hashes for caching
-                        row_hashes = await backend._fetch_partition_row_hashes_direct(partition, hash_algo=hash_algo)
-                        
-                        self._evict_if_needed()
-                        
-                        cache_entry = CacheEntry(
-                            partition_id=partition.partition_id,
-                            row_hashes=row_hashes,
-                            unique_keys=unique_keys,
-                            order_keys=order_keys,
-                            hash_algo=hash_algo,
-                            num_rows=len(row_hashes)
-                        )
-                        
-                        self.cache[partition.partition_id] = cache_entry
-                        # Move to end (most recently used)
-                        self.cache.move_to_end(partition.partition_id)
-                        
-                        logger.debug(f"Cached row hashes for partition {partition.partition_id} ({len(row_hashes)} rows)")
-                        
-                    except Exception as e:
-                        logger.warning(f"Failed to cache partition {partition.partition_id}: {e}")
+                # Always try to cache, eviction will handle row limits
+                try:
+                    # Fetch row hashes for caching
+                    row_hashes = await backend._fetch_partition_row_hashes_direct(partition, hash_algo=hash_algo)
+                    
+                    # Create cache entry first
+                    cache_entry = CacheEntry(
+                        partition_id=partition.partition_id,
+                        row_hashes=row_hashes,
+                        unique_keys=[col.expr for col in backend.column_schema.unique_keys] if backend.column_schema.unique_keys else [],
+                        order_keys=[col.expr for col, _ in backend.column_schema.order_keys] if backend.column_schema.order_keys else [],
+                        hash_algo=hash_algo,
+                        num_rows=len(row_hashes)
+                    )
+                    
+                    # # Evict if needed to make room for new entry
+                    # temp_total = self._total_cached_rows + len(row_hashes)
+                    # while temp_total >= self.max_rows and self.cache:
+                    #     oldest_key = next(iter(self.cache))
+                    #     oldest_entry = self.cache[oldest_key]
+                    #     temp_total -= oldest_entry.num_rows
+                    #     self._total_cached_rows -= oldest_entry.num_rows
+                    #     del self.cache[oldest_key]
+                    #     logger.debug(f"Evicted cache entry for partition {oldest_key} ({oldest_entry.num_rows} rows)")
+                    
+                    # Add new entry
+                    self.cache[partition.partition_id] = cache_entry
+                    self._total_cached_rows += len(row_hashes)
+                    # Move to end (most recently used)
+                    self.cache.move_to_end(partition.partition_id)
+                    
+                    logger.debug(f"Cached row hashes for partition {partition.partition_id} ({len(row_hashes)} rows)")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to cache partition {partition.partition_id}: {e}")
         
         return result
     
-    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo: HashAlgo, 
-                                       backend) -> List[Dict]:
+    async def fetch_partition_row_hashes(self, partition: Partition, backend, fallback_fn: Callable, hash_algo: HashAlgo) -> List[Dict]:
         """
         Fetch partition row hashes, serving from cache if available.
         Checks if the asked partition is derived from existing cache partition.
@@ -284,7 +303,7 @@ class HashCache:
                 logger.debug(f"Serving row hashes for partition {partition.partition_id} from cache")
                 return cached_entry.row_hashes
             
-            # Check if partition is a subpartition of cached data
+            # Check if partition is a subpartition of cached data using index
             if partition.partition_id:
                 for cached_partition_id, cached_entry in self.cache.items():
                     if self._is_subpartition(partition.partition_id, cached_partition_id):
@@ -296,10 +315,12 @@ class HashCache:
                         
                         # Move parent to end (most recently used)
                         self.cache.move_to_end(cached_partition_id)
+                        self._cache_hits += 1
                         return filtered_rows
         
         # Not in cache, fetch from backend directly
-        return await backend._fetch_partition_row_hashes_direct(partition, hash_algo=hash_algo)
+        self._cache_misses += 1
+        return await fallback_fn()
     
     async def fetch_row_hashes(self, unique_key_values: List[Dict[str, Any]], 
                              unique_keys: List[str], partition_column: str,
@@ -350,28 +371,106 @@ class HashCache:
         
         return result
     
-    def mark_partition_complete(self, partition_id: str):
+    def mark_partition_complete(self, partition_id: str, partition: Optional[Partition] = None):
         """
         Mark partition as complete and evict it from cache.
-        Always evicts the exact partition_id without searching for subpartitions.
+        - If partition_id exists directly in cache (self), remove the entire entry
+        - If partition_id is a subpartition of any cached partition, remove only the rows 
+          belonging to this subpartition from the parent partition cache
         """
         with self._lock:
+            # Case 1: Check if this partition is directly cached (self)
             if partition_id in self.cache:
+                entry = self.cache[partition_id]
+                self._total_cached_rows -= entry.num_rows
                 del self.cache[partition_id]
-                logger.debug(f"Evicted completed partition {partition_id} from cache")
+                logger.debug(f"Evicted completed partition {partition_id} from cache ({entry.num_rows} rows)")
+                return
+            
+            # Case 2: Check if this partition is a subpartition of any existing cached partition
+            if partition:
+                for cached_partition_id, cached_entry in self.cache.items():
+                    # Check if partition_id is a subpartition of cached_partition_id
+                    if self._is_subpartition(partition_id, cached_partition_id):
+                        logger.debug(f"Found parent partition {cached_partition_id} for completed subpartition {partition_id}")
+                        
+                        try:
+                            # Get boundaries for the completed subpartition
+                            start_val, end_val = self._get_partition_boundaries(partition, partition_id)
+                            
+                            # Filter out rows that belong to the completed subpartition
+                            partition_column = partition.column
+                            remaining_rows = []
+                            removed_count = 0
+                            
+                            for row in cached_entry.row_hashes:
+                                if partition_column in row:
+                                    row_val = row[partition_column]
+                                    if start_val <= row_val < end_val:
+                                        # This row belongs to the completed subpartition, remove it
+                                        removed_count += 1
+                                    else:
+                                        # Keep this row
+                                        remaining_rows.append(row)
+                                else:
+                                    # Keep rows without partition column
+                                    remaining_rows.append(row)
+                            
+                            if removed_count > 0:
+                                # Update the cached entry with remaining rows
+                                old_row_count = cached_entry.num_rows
+                                updated_entry = CacheEntry(
+                                    partition_id=cached_entry.partition_id,
+                                    row_hashes=remaining_rows,
+                                    unique_keys=cached_entry.unique_keys,
+                                    order_keys=cached_entry.order_keys,
+                                    hash_algo=cached_entry.hash_algo,
+                                    num_rows=len(remaining_rows)
+                                )
+                                
+                                # Update cache and total row count
+                                self.cache[cached_partition_id] = updated_entry
+                                self._total_cached_rows = self._total_cached_rows - old_row_count + len(remaining_rows)
+                                
+                                logger.debug(f"Removed {removed_count} rows from cached parent partition {cached_partition_id} "
+                                           f"for completed subpartition {partition_id}")
+                                
+                                # If no rows remain in parent partition, remove it entirely
+                                if len(remaining_rows) == 0:
+                                    del self.cache[cached_partition_id]
+                                    self._total_cached_rows -= len(remaining_rows)  # Should be 0, but for safety
+                                    logger.debug(f"Removed empty parent partition {cached_partition_id} after completing subpartition {partition_id}")
+                                
+                                return  # Found and processed the parent partition
+                            
+                        except Exception as e:
+                            logger.warning(f"Failed to remove rows for completed subpartition {partition_id} from parent {cached_partition_id}: {e}")
+                            continue
+            
+            # If we reach here, the partition was not found in cache (neither self nor subpartition)
+            logger.debug(f"Completed partition {partition_id} was not found in cache")
     
     def clear_cache(self):
         """Clear all cached entries"""
         with self._lock:
             self.cache.clear()
+            self._total_cached_rows = 0
             logger.debug("Cleared all cache entries")
     
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
         with self._lock:
+            total_requests = self._cache_hits + self._cache_misses
+            hit_rate = self._cache_hits / total_requests if total_requests > 0 else 0
+            
             return {
-                'size': len(self.cache),
-                'max_size': self.max_size,
+                'partitions_count': len(self.cache),
+                'total_cached_rows': self._total_cached_rows,
+                'max_rows': self.max_rows,
                 'partitions': list(self.cache.keys()),
-                'utilization': len(self.cache) / self.max_size if self.max_size > 0 else 0
+                'utilization': self._total_cached_rows / self.max_rows if self.max_rows > 0 else 0,
+                'cache_hits': self._cache_hits,
+                'cache_misses': self._cache_misses,
+                'hit_rate': hit_rate
             }
+

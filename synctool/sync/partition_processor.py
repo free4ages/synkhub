@@ -230,7 +230,7 @@ class PartitionProcessor:
         else:
             self.partition.intervals = build_intervals(self.sync_engine.config.partition_step, self.strategy_config.min_sub_partition_step, self.strategy_config.interval_reduction_factor)
         # import pdb; pdb.set_trace()
-        partitions, statuses, hash_query_count = await self.calculate_sub_partitions(self.partition,  max_level=len(self.partition.intervals)-1, page_size=self.strategy_config.page_size)
+        partitions, statuses= await self.calculate_sub_partitions(self.partition,  max_level=len(self.partition.intervals)-1, page_size=self.strategy_config.page_size)
         
         partitions, statuses = merge_adjacent(partitions, statuses, self.strategy_config.page_size)
         sync_engine = self.sync_engine
@@ -318,31 +318,28 @@ class PartitionProcessor:
         partition: Partition,
         max_level =100,
         page_size: int = 1000
-    ) -> Tuple[List[Partition], List[str], int]:
+    ) -> Tuple[List[Partition], List[str]]:
         src_rows: list[dict[str, Any]] = await self.sync_engine.source_provider.fetch_child_partition_hashes(partition, hash_algo=self.sync_engine.hash_algo)
         destination_rows = await self.sync_engine.destination_provider.fetch_child_partition_hashes(partition, hash_algo=self.sync_engine.hash_algo)
         s_partitions: list[Partition] = to_partitions(src_rows, partition)
         d_partitions: list[Partition] = to_partitions(destination_rows, partition)
         partitions, status_map = calculate_partition_status(s_partitions, d_partitions)
         final_partitions, statuses = [], []
-        hash_query_count = 0
         for p in partitions:
             key = (p.start, p.end, p.level)
             st = status_map[key]
             # if p.level == 1:
             if st in ('M', 'A') and (p.num_rows > page_size and p.level<max_level):
                 # intervals[level] = math.floor(intervals[-1]/interval_reduction_factor)
-                deeper_partitions, deeper_statuses, deeper_hash_query_count = await self.calculate_sub_partitions(
+                deeper_partitions, deeper_statuses = await self.calculate_sub_partitions(
                     p,
                     max_level=max_level,
                     page_size=page_size
                 )
-                hash_query_count += deeper_hash_query_count
                 final_partitions.extend(deeper_partitions)
                 statuses.extend(deeper_statuses)
             else:
                 final_partitions.append(p)
                 statuses.append(st)
-                hash_query_count += 1
 
-        return final_partitions, statuses, hash_query_count
+        return final_partitions, statuses
