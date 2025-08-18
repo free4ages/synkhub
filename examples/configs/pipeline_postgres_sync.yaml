@@ -1,0 +1,333 @@
+name: 'pipeline_postgres_sync'
+description: 'Pipeline sync from Postgres to Postgres with cron expressions'
+max_concurrent_partitions: 1
+# global column definition that will be used everywhere
+columns:
+  - name: 'user_id'
+    unique_key: true
+    order_key: true
+    dtype: 'integer'
+    direction: 'asc'
+    hash_field: true
+  - name: 'first_name'
+    dtype: 'varchar'
+    hash_field: true
+  - name: 'last_name'
+    dtype: 'varchar'
+    hash_field: true
+  - name: 'email'
+    dtype: 'varchar'
+    hash_field: true
+  - name: 'created_at'
+    dtype: 'datetime'
+    hash_field: true
+  - name: 'updated_at'
+    dtype: 'datetime'
+    hash_field: true
+  - name: 'status'
+    dtype: 'varchar'
+    hash_field: true
+  - name: 'name'
+    dtype: 'varchar'
+    hash_field: true
+  - name: 'checksum'
+    dtype: 'varchar'
+    hash_key: true
+stages:
+  - name: 'change_detection'
+    source:
+      type: 'postgres'
+      datastore_name: 'local_postgres'
+      table: 'users'
+      alias: 'u'
+      schema: 'public'
+      join:
+        - table: 'user_profiles'
+          alias: 'p'
+          'on': 'u.id = p.user_id'
+          type: 'left'
+      filters: []
+      columns:
+        - name: 'user_id'
+          expr: 'u.id'
+        - name: 'first_name'
+          expr: 'u.first_name'
+          add_to_data: false
+        - name: 'last_name'
+          expr: 'u.last_name'
+          add_to_data: false
+        - name: 'email'
+          expr: 'p.email'
+          add_to_data: false
+        - name: 'status'
+          expr: 'u.status'
+          add_to_data: false
+        - name: 'created_at'
+          expr: 'u.created_at'
+          add_to_data: false
+        - name: 'updated_at'
+          expr: 'u.updated_at'
+          add_to_data: false
+    destination:
+        type: 'postgres'
+        datastore_name: 'local_postgres'
+        table: 'user_profile'
+        schema: 'public_copy'
+        supports_update: true
+        columns:
+          - name: 'user_id'
+          - name: 'first_name'
+            add_to_data: false
+          - name: 'last_name'
+            add_to_data: false
+          - name: 'email'
+            add_to_data: false
+          - name: 'status'
+            add_to_data: false
+          - name: 'created_at'
+            expr: 'source_created_at'
+            add_to_data: false
+          - name: 'updated_at'
+            expr: 'source_updated_at'
+            add_to_data: false
+          - name: 'checksum'
+    strategies:
+      # Delta sync every 15 minutes
+      - name: 'delta'
+        type: 'delta'
+        parition_key: 'updated_at'
+        sub_partition_step: 1800  # 30 minutes
+        enabled: true
+        cron: '*/15 * * * *'  # Every 15 minutes
+        page_size: 10
+        use_pagination: true
+        use_sub_partitions: false
+      
+      # Hash sync every 2 hours
+      - name: 'hash'
+        type: 'hash'
+        enabled: true
+        partition_key: 'user_id'
+        partition_step: 100
+        column: 'user_id'
+        sub_partition_step: 10
+        cron: '0 */2 * * *'  # Every 2 hours
+        page_size: 10
+        use_pagination: true
+        use_sub_partition: false
+      
+      # Full sync daily at 3 AM
+      - name: 'full'
+        type: 'full'
+        enabled: true
+        column: 'user_id'
+        partition_key: 'user_id'
+        partition_step: 100
+        sub_partition_step: 10
+        page_size: 10
+        cron: '0 3 * * *'  # Daily at 3 AM
+        use_pagination: true
+        use_sub_partition: false
+      
+      # Weekly full sync on Sunday at 2 AM (disabled by default)
+      - name: 'weekly_full'
+        type: 'full'
+        enabled: false
+        partition_key: 'created_at'
+        partition_step: 432000  # 5 days
+        column: 'created_at'
+        sub_partition_step: 432000  # 5 days
+        page_size: 1000
+        cron: '0 2 * * 0'  # Weekly on Sunday at 2 AM
+  
+  - name: 'hash_batcher'
+    type: 'batcher'
+    enabled: true
+    target_batch_size: 1000
+
+  - name: 'source_data_fetch'
+    type: 'data_fetch'
+    enabled: true
+    use_pagination: true
+    page_size: 10
+    backend:
+      type: 'postgres'
+      datastore_name: 'local_postgres'
+      table: 'users'
+      alias: 'u'
+      schema: 'public'
+      join:
+        - table: 'user_profiles'
+          alias: 'p'
+          'on': 'u.id = p.user_id'
+          type: 'left'
+      filters: []
+      columns:
+        - name: 'user_id'
+          expr: 'u.id'
+        - name: 'first_name'
+          expr: 'u.first_name'
+        - name: 'last_name'
+          expr: 'u.last_name'
+        - name: 'email'
+          expr: 'p.email'
+        - name: 'status'
+          expr: 'u.status'
+        - name: 'created_at'
+          expr: 'u.created_at'
+        - name: 'updated_at'
+          expr: 'u.updated_at'
+  - name: 'destination_data_fetch'
+    type: 'data_fetch'
+    enabled: true
+    use_pagination: true
+    page_size: 10
+    backend:
+      type: 'postgres'
+      datastore_name: 'local_postgres'
+      table: 'user_profile'
+      alias: 'p'
+      schema: 'public_copy'
+      columns:
+        - name: 'user_id'
+        - name: 'name'
+        - name: 'email'
+        - name: 'status'
+        - name: 'created_at'
+        - name: 'updated_at'
+        - name: 'checksum'
+  - name: 'transformation'
+    type: 'transform'
+    enabled: true
+    transformations:
+      - columns:
+        - first_name
+        - last_name
+        transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
+        expr: 'name'
+  - name: 'custom'
+    type: 'custom'
+    enabled: true
+    class_path: 'synctool.enrichment.enrichment_engine.EnrichmentEngine'
+    config:
+      transformations:
+        - columns:
+            - first_name
+            - last_name
+          transform: 'lambda x: x["last_name"].upper()'
+          dest: 'last_name'
+          dtype: 'varchar'
+
+
+source_provider:
+  data_backend:
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'users'
+    alias: 'u'
+    schema: 'public'
+    join:
+      - table: 'user_profiles'
+        alias: 'p'
+        'on': 'u.id = p.user_id'
+        type: 'left'
+    filters: []
+
+destination_provider:
+  data_backend:
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'user_profile'
+    schema: 'public_copy'
+    supports_update: true
+
+column_map:
+  - name: 'user_id'
+    src: 'u.id'
+    dest: 'user_id'
+    unique_key: true
+    order_key: true
+    dtype: 'integer'
+    direction: 'asc'
+  - name: 'first_name'
+    src: 'u.first_name'
+    dest: 'first_name'
+    insert: false
+    dtype: 'varchar'
+  - name: 'created_at'
+    src: 'u.created_at'
+    dest: 'source_created_at'
+    dtype: 'datetime'
+  - name: 'updated_at'
+    src: 'u.updated_at'
+    dest: 'source_updated_at'
+    dtype: 'datetime'
+  - name: 'email'
+    src: 'p.email'
+    dest: 'email'
+    dtype: 'varchar'
+  - name: 'last_name'
+    src: 'u.last_name'
+    dest: 'last_name'
+    insert: false
+  - name: 'status'
+    src: 'u.status'
+    dest: 'status'
+  - name: 'name'
+    src: null
+    dest: 'name'
+  - name: 'checksum'
+    src: null
+    dest: 'checksum'
+    dtype: 'varchar'
+    hash_key: true
+
+partition_key: 'user_id'
+partition_step: 100
+
+strategies:
+  # Delta sync every 15 minutes
+  - name: 'delta'
+    type: 'delta'
+    column: 'updated_at'
+    sub_partition_step: 1800  # 30 minutes
+    enabled: true
+    cron: '*/15 * * * *'  # Every 15 minutes
+    page_size: 10
+  
+  # Hash sync every 2 hours
+  - name: 'hash'
+    type: 'hash'
+    enabled: true
+    column: 'user_id'
+    sub_partition_step: 10
+    cron: '0 */2 * * *'  # Every 2 hours
+    page_size: 10
+  
+  # Full sync daily at 3 AM
+  - name: 'full'
+    type: 'full'
+    enabled: true
+    column: 'user_id'
+    sub_partition_step: 10
+    page_size: 10
+    cron: '0 3 * * *'  # Daily at 3 AM
+  
+  # Weekly full sync on Sunday at 2 AM (disabled by default)
+  - name: 'weekly_full'
+    type: 'full'
+    enabled: false
+    column: 'created_at'
+    sub_partition_step: 432000  # 5 days
+    page_size: 1000
+    cron: '0 2 * * 0'  # Weekly on Sunday at 2 AM
+
+enrichment:
+  enabled: true
+  transformations:
+    - columns:
+        - first_name
+        - last_name
+      transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
+      dest: 'name'
+      dtype: 'integer'

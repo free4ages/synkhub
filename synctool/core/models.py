@@ -181,6 +181,10 @@ class StrategyConfig:
     # Also prevents sub partitions from being created in hash strategy.
     page_size: int = 1000
     cron: Optional[str] = None  # Cron expression for scheduling
+    
+    # New pipeline configuration
+    pipeline_config: Optional[Dict[str, Any]] = None
+    enable_pipeline: bool = True  # Whether to use pipeline architecture
 
 @dataclass
 class TransformationConfig:

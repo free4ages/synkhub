@@ -19,6 +19,7 @@ from ..utils.sync_result_builder import SyncResultBuilder
 from ..utils.progress_manager import ProgressManager
 from ..enrichment.enrichment_engine import EnrichmentEngine
 from ..sync.partition_processor import PartitionProcessor
+from ..sync.partition_processor_pipeline import HybridPartitionProcessor
 from ..core.schema_models import UniversalDataType
 from ..core.column_mapper import ColumnSchema
 
@@ -225,7 +226,7 @@ class SyncEngine:
                 try:
                     if strategy_config is None:
                         raise ValueError(f"Strategy config is required for partition processing")
-                    processor: 'PartitionProcessor' = PartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
+                    processor: 'HybridPartitionProcessor' = HybridPartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
                     result: dict[str, Any] = await processor.process()
                     results.append(result)
                     # Update progress using progress manager
@@ -250,7 +251,7 @@ class SyncEngine:
                     if strategy_config is None:
                         raise ValueError(f"Strategy config is required for partition processing")
 
-                    processor = PartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
+                    processor = HybridPartitionProcessor(self, partition, strategy, strategy_config, logger=self.logger)
                     result = await processor.process()
                     
                     # Update progress using progress manager

@@ -1,0 +1,123 @@
+# Example configuration showing how to use the new pipeline architecture
+
+name: "example_pipeline_sync"
+description: "Example sync job using pipeline architecture"
+partition_step: 1000
+partition_key: "id"
+
+source_provider:
+  data_backend:
+    type: "postgres"
+    datastore_name: "source_db"
+    table: "users"
+    schema: "public"
+
+destination_provider:
+  data_backend:
+    type: "postgres"
+    datastore_name: "dest_db"
+    table: "users_copy"
+    schema: "public"
+
+column_map:
+  - source: "id"
+    dest: "user_id"
+    roles: ["unique_key", "partition_key"]
+    dtype: "int"
+  - source: "name"
+    dest: "full_name"
+    dtype: "string"
+  - source: "email"
+    dest: "email_address"
+    dtype: "string"
+  - source: "created_at"
+    dest: "created_timestamp"
+    dtype: "timestamp"
+
+strategies:
+  - name: "full_pipeline"
+    type: "full"
+    enabled: true
+    use_sub_partitions: true
+    sub_partition_step: 100
+    use_pagination: true
+    page_size: 500
+    # New pipeline configuration
+    enable_pipeline: true
+    pipeline_config:
+      max_concurrent_batches: 5
+      batch_size: 500
+      stages:
+        change_detection:
+          enabled: true
+        data_fetch:
+          enabled: true
+          use_pagination: true
+          page_size: 500
+        transform:
+          enabled: true
+          transformations:
+            - type: "column_cast"
+              casts:
+                user_id: "int"
+                created_timestamp: "str"
+            - type: "value_map"
+              column: "status"
+              mapping:
+                "A": "active"
+                "I": "inactive"
+        enrich:
+          enabled: true
+        batcher:
+          enabled: true
+          target_batch_size: 1000
+        populate:
+          enabled: true
+
+  - name: "hash_pipeline"
+    type: "hash"
+    enabled: true
+    min_sub_partition_step: 10
+    interval_reduction_factor: 2
+    prevent_update_unless_changed: true
+    page_size: 1000
+    # New pipeline configuration
+    enable_pipeline: true
+    pipeline_config:
+      max_concurrent_batches: 8
+      batch_size: 1000
+      stages:
+        change_detection:
+          enabled: true
+        data_fetch:
+          enabled: true
+          use_pagination: false
+        transform:
+          enabled: false
+        enrich:
+          enabled: true
+        batcher:
+          enabled: false
+        populate:
+          enabled: true
+
+enrichment:
+  enabled: true
+  cache_backend: "memory"
+  cache_config:
+    maxsize: 10000
+  dimensions:
+    - name: "user_profile"
+      join_key: "user_id"
+      source:
+        type: "postgres"
+        config:
+          datastore_name: "profile_db"
+          table: "user_profiles"
+      fields:
+        - source: "department"
+          dest: "user_department"
+          dtype: "string"
+        - source: "role"
+          dest: "user_role"
+          dtype: "string"
