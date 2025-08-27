@@ -185,9 +185,10 @@ class BaseBackend(ABC):
 
 
 class Backend(BaseBackend):
-    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
-        self.config = config
-        self.provider_type = BackendType(config.type)
+    _config_class = BackendConfig
+    def __init__(self, config: Dict[str, Any], column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
+        self.config = self._config_class(**config)
+        self.provider_type = BackendType(self.config.type)
         
         # Debug logging
         if logger:
@@ -199,27 +200,27 @@ class Backend(BaseBackend):
         self._datastore = None
         
         # Resolve datastore_name to connection config
-        if hasattr(config, 'datastore_name') and config.datastore_name and data_storage:
-            datastore = data_storage.get_datastore(config.datastore_name)
+        if hasattr(self.config, 'datastore_name') and self.config.datastore_name and data_storage:
+            datastore = data_storage.get_datastore(self.config.datastore_name)
             if not datastore:
-                raise ValueError(f"Datastore '{config.datastore_name}' not found in DataStorage")
+                raise ValueError(f"Datastore '{self.config.datastore_name}' not found in DataStorage")
             self.connection_config = datastore.connection
             self._datastore = datastore  # Store for capability checking
             if logger:
-                logger.info(f"Using datastore '{config.datastore_name}' connection config")
+                logger.info(f"Using datastore '{self.config.datastore_name}' connection config")
         else:
             # Fallback for backward compatibility with direct connection config
             self.connection_config = ConnectionConfig(**config.connection) if hasattr(config, 'connection') and config.connection else ConnectionConfig()
             if logger:
                 logger.info(f"Using fallback connection config: {self.connection_config}")
         
-        self.table = config.table
-        self.alias = config.alias
-        self.schema = config.schema or self.connection_config.schema or self._get_default_schema()
+        self.table = self.config.table
+        self.alias = self.config.alias
+        self.schema = self.config.schema or self.connection_config.schema or self._get_default_schema()
         # Removed: self.columns = [ColumnConfig(**col) for col in config.columns] if config.columns else []
-        self.joins = [JoinConfig(**join) for join in config.join] if config.join else []
+        self.joins = [JoinConfig(**join) for join in self.config.join] if self.config.join else []
         # Fix filter parsing - config.filters should be List[Dict] not List[str]
-        self.filters = [FilterConfig(**filter) for filter in (config.filters or []) if isinstance(filter, dict)]
+        self.filters = [FilterConfig(**filter) for filter in (self.config.filters or []) if isinstance(filter, dict)]
         self.supports_update = config.supports_update
         # Removed: self.column_mapping = ColumnMapping(**config.column_mapping) if config.column_mapping else ColumnMapping()
         self.column_schema = column_schema  # New: ColumnSchema instance

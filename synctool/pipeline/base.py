@@ -2,16 +2,23 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, AsyncIterator, TypeVar, Generic, Union
+from typing import Any, Dict, List, Optional, AsyncIterator, TypeVar, Generic, Union, TYPE_CHECKING, Type
 from datetime import datetime
 import uuid
 
 from ..core.models import Partition, StrategyConfig
 
+
 # Type variables for pipeline data
 T = TypeVar('T')
 U = TypeVar('U')
 
+@dataclass
+class StageConfig:
+    """Configuration for a single pipeline stage"""
+    name: str
+    type: str
+    enabled: bool
 
 @dataclass
 class PipelineContext:
@@ -28,7 +35,7 @@ class PipelineContext:
 class DataBatch:
     """Data batch flowing through pipeline"""
     data: List[Dict[str, Any]]
-    context: PipelineContext
+    context: Any  # JobContext - using Any to avoid circular imports
     batch_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     batch_metadata: Dict[str, Any] = field(default_factory=dict)
     size: int = field(init=False)
@@ -50,28 +57,32 @@ class StageResult:
 
 class PipelineStage(ABC, Generic[T, U]):
     """Base class for all pipeline stages"""
+    _config_class: Type[StageConfig] = StageConfig
     
-    def __init__(self, name: str, config: Dict[str, Any] = None, logger: Optional[logging.Logger] = None):
+    def __init__(self, name: str, config: Union[StageConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
         self.name = name
-        self.config = config or {}
+        if isinstance(config, StageConfig):
+            self.config = config
+        else:
+            self.config = self._config_class(**config)
         self.logger = logger or logging.getLogger(f"{__name__}.{name}")
-        self.enabled = self.config.get('enabled', True)
+        self.enabled = self.config.enabled
         self.stage_id = str(uuid.uuid4())
     
     @abstractmethod
-    async def process(self, input_stream: AsyncIterator[T]) -> AsyncIterator[U]:
+    def process(self, input_stream: AsyncIterator[T]) -> AsyncIterator[U]:
         """Process the input stream and yield output"""
         pass
     
-    async def setup(self, context: PipelineContext) -> None:
+    async def setup(self, context: Any) -> None:
         """Setup stage before processing (optional override)"""
         pass
     
-    async def teardown(self, context: PipelineContext) -> None:
+    async def teardown(self, context: Any) -> None:
         """Cleanup after processing (optional override)"""
         pass
     
-    def should_process(self, context: PipelineContext) -> bool:
+    def should_process(self, context: Any) -> bool:
         """Determine if this stage should process the given context"""
         return self.enabled
 
@@ -79,10 +90,11 @@ class PipelineStage(ABC, Generic[T, U]):
 class BatchProcessor(PipelineStage[DataBatch, DataBatch]):
     """Base class for stages that process data batches"""
     
-    def __init__(self, name: str, config: Dict[str, Any] = None, logger: Optional[logging.Logger] = None):
+    def __init__(self, name: str, config: Union[StageConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
         super().__init__(name, config, logger)
-        self.max_batch_size = self.config.get('max_batch_size', 1000)
-        self.buffer_size = self.config.get('buffer_size', 10)
+        # StageConfig is a dataclass, access attributes directly with defaults
+        self.max_batch_size = getattr(config, 'max_batch_size', 1000)
+        self.buffer_size = getattr(config, 'buffer_size', 10)
     
     @abstractmethod
     async def process_batch(self, batch: DataBatch) -> DataBatch:
@@ -103,32 +115,32 @@ class BatchProcessor(PipelineStage[DataBatch, DataBatch]):
                     result = await self.process_batch(batch)
                     duration = (datetime.now() - start_time).total_seconds() * 1000
                     
-                    # Record stage result
-                    stage_result = StageResult(
-                        stage_name=self.name,
-                        success=True,
-                        data_processed=batch.size,
-                        duration_ms=duration
-                    )
-                    result.context.stage_results[self.name] = stage_result
+                    # Record stage result in job context metadata
+                    stage_stats = result.context.metadata.get(f"{self.name}_stats", {})
+                    stage_stats.update({
+                        "success": True,
+                        "data_processed": batch.size,
+                        "duration_ms": duration
+                    })
+                    result.context.metadata[f"{self.name}_stats"] = stage_stats
                     
                     self.logger.debug(f"Processed batch {batch.batch_id} in {duration:.2f}ms")
                     return result
                     
                 except Exception as e:
                     duration = (datetime.now() - start_time).total_seconds() * 1000
-                    stage_result = StageResult(
-                        stage_name=self.name,
-                        success=False,
-                        error=str(e),
-                        duration_ms=duration
-                    )
-                    batch.context.stage_results[self.name] = stage_result
+                    stage_stats = batch.context.metadata.get(f"{self.name}_stats", {})
+                    stage_stats.update({
+                        "success": False,
+                        "error": str(e),
+                        "duration_ms": duration
+                    })
+                    batch.context.metadata[f"{self.name}_stats"] = stage_stats
                     self.logger.error(f"Failed to process batch {batch.batch_id}: {e}")
                     raise
         
         # Process batches with controlled concurrency
-        tasks = []
+        tasks: List[asyncio.Task[DataBatch]] = []
         async for batch in input_stream:
             task = asyncio.create_task(process_with_semaphore(batch))
             tasks.append(task)
@@ -179,10 +191,14 @@ class PipelineStats:
 
 class Pipeline:
     """Main pipeline orchestrator"""
+    _config_class: Type[PipelineConfig] = PipelineConfig
     
-    def __init__(self, config: PipelineConfig, logger: Optional[logging.Logger] = None):
-        self.config = config
-        self.logger = logger or logging.getLogger(f"{__name__}.pipeline.{config.name}")
+    def __init__(self, config: Union[PipelineConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
+        if isinstance(config, PipelineConfig):
+            self.config = config
+        else:
+            self.config = self._config_class(**config)
+        self.logger = logger or logging.getLogger(f"{__name__}.pipeline.{self.config.name}")
         self.stages: List[PipelineStage] = []
         self.stats = PipelineStats(pipeline_id=str(uuid.uuid4()))
     
@@ -191,7 +207,7 @@ class Pipeline:
         self.stages.append(stage)
         return self
     
-    async def execute(self, context: PipelineContext) -> PipelineStats:
+    async def execute(self, context: Any) -> PipelineStats:
         """Execute the pipeline for a given context"""
         self.stats.start_time = datetime.now()
         
@@ -234,6 +250,6 @@ class Pipeline:
         
         return self.stats
     
-    async def _create_context_stream(self, context: PipelineContext) -> AsyncIterator[PipelineContext]:
+    async def _create_context_stream(self, context: Any) -> AsyncIterator[Any]:
         """Create stream from single context"""
         yield context

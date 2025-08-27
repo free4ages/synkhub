@@ -106,6 +106,7 @@ class SchedulerCLI:
     
     async def run_job(self, args):
         """Run a specific job manually"""
+        import pdb;pdb.set_trace()
         config = SchedulerConfig(
             config_dir=args.config_dir,
             metrics_dir=args.metrics_dir

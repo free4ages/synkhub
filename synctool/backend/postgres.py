@@ -30,7 +30,8 @@ class PostgresBackend(SqlBackend):
         self._connection = None
         # Scale up cache size for better performance
         cache_size = getattr(config, 'cache_size', 5000)
-        self.hash_cache = HashCache(max_size=cache_size)
+        # self.hash_cache = HashCache(max_rows=cache_size)
+        self.hash_cache = None
     
     def _get_default_schema(self) -> str:
         return 'public'
@@ -141,7 +142,10 @@ class PostgresBackend(SqlBackend):
         """Fetch partition row hashes from destination along with state columns"""
         # Use HashCache for optimized fetching
         fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo)
-        return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo)
+        if self.hash_cache:
+            return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo)
+        else:
+            return await fallback_fn()
     
     async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch child partition hashes"""
@@ -153,9 +157,12 @@ class PostgresBackend(SqlBackend):
             raise ValueError("Column schema is required for hash cache operations")
         
         fallback_fn = lambda: self._fetch_child_partition_hashes_direct(partition, with_hash, hash_algo)
-        return await self.hash_cache.fetch_child_partition_hashes(
-            partition, self, fallback_fn, hash_algo
-        )
+        if self.hash_cache:
+            return await self.hash_cache.fetch_child_partition_hashes(
+                partition, self, fallback_fn, hash_algo
+            )
+        else:
+            return await fallback_fn()
     
     async def _fetch_child_partition_hashes_direct(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Direct database fetch for child partition hashes - used by HashCache"""
@@ -170,15 +177,20 @@ class PostgresBackend(SqlBackend):
     
     def mark_partition_complete(self, partition_id: str):
         """Mark partition as complete and evict from cache"""
-        self.hash_cache.mark_partition_complete(partition_id)
+        if self.hash_cache:
+            self.hash_cache.mark_partition_complete(partition_id)
     
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get hash cache statistics"""
-        return self.hash_cache.get_cache_stats()
+        if self.hash_cache:
+            return self.hash_cache.get_cache_stats()
+        else:
+            return {}
     
     def clear_cache(self):
         """Clear the hash cache"""
-        self.hash_cache.clear_cache()
+        if self.hash_cache:
+            self.hash_cache.clear_cache()
     
     async def fetch_row_hashes(self, unique_key_values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Fetch row hashes for specific unique key values from cache if possible"""

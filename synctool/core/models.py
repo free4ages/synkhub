@@ -292,11 +292,11 @@ class BackendConfig:
     backend: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
 
-@dataclass
-class ProviderConfig:
-    """Provider configuration"""
-    data_backend: BackendConfig
-    state_backend: Optional[BackendConfig]
+# @dataclass
+# class ProviderConfig:
+#     """Provider configuration"""
+#     data_backend: BackendConfig
+#     state_backend: Optional[BackendConfig]
 
 
 @dataclass
@@ -304,16 +304,18 @@ class SyncJobConfig:
     """Complete sync job configuration"""
     name: str
     description: str
-    partition_step: int
-    partition_key: str
-    source_provider: ProviderConfig
-    destination_provider: ProviderConfig
-    # Column mapping configuration
-    column_map: List[Dict[str, Any]]
-    strategies: List[Dict[str, Any]] = field(default_factory=list)
-    enrichment: Optional[Dict[str, Any]] = None
-    hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
-    partition_prefix_length: int = 2
+    columns: List[Dict[str, Any]] = field(default_factory=list)
+    stages: List[Dict[str, Any]] = field(default_factory=list)
+    # partition_step: int
+    # partition_key: str
+    # source_provider: ProviderConfig
+    # destination_provider: ProviderConfig
+    # # Column mapping configuration
+    # column_map: List[Dict[str, Any]]
+    # strategies: List[Dict[str, Any]] = field(default_factory=list)
+    # enrichment: Optional[Dict[str, Any]] = None
+    # hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
+    # partition_prefix_length: int = 2
 
     # Concurrency settings
     max_concurrent_partitions: int = 4
@@ -326,29 +328,34 @@ class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
     dtype: Optional[UniversalDataType] = None
-    roles: List[str] = field(default_factory=list)
-    insert: bool = True
-    expr_map: Optional[Dict[str, str|None]] = None
+    hash_field: bool = True
+    data_field: bool = True
+    unique_key: bool = False
+    order_key: bool = False
+    direction: str = "asc"
+    delta_key: bool = False
+    partition_key: bool = False
+    hash_key: bool = False
 
-    def get_order_direction(self) -> Optional[str]:
-        """
-        Parses order_key role to return sorting direction if any.
-        Example: 'order_key[asc]' -> 'asc'
-        """
-        for role in self.roles:
-            if role.startswith("order_key"):
-                # Extract direction in brackets if exists
-                if "[" in role and role.endswith("]"):
-                    return role[role.index("[")+1 : -1].lower()
-                return "asc"  # default if no direction specified
-        return None
+    # def get_order_direction(self) -> Optional[str]:
+    #     """
+    #     Parses order_key role to return sorting direction if any.
+    #     Example: 'order_key[asc]' -> 'asc'
+    #     """
+    #     for role in self.roles:
+    #         if role.startswith("order_key"):
+    #             # Extract direction in brackets if exists
+    #             if "[" in role and role.endswith("]"):
+    #                 return role[role.index("[")+1 : -1].lower()
+    #             return "asc"  # default if no direction specified
+    #     return None
 
-    def has_role(self, role_name: str) -> bool:
-        """Checks if this column has a role (prefix match)."""
-        return any(r.startswith(role_name) for r in self.roles)
+    # def has_role(self, role_name: str) -> bool:
+    #     """Checks if this column has a role (prefix match)."""
+    #     return any(r.startswith(role_name) for r in self.roles)
     
-    def is_enriched_column(self) -> bool:
-        return self.has_role("enriched_key")
+    # def is_enriched_column(self) -> bool:
+    #     return self.has_role("enriched_key")
     
     def cast(self, value: Any) -> Any:
         if not self.dtype:

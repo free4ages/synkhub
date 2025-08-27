@@ -1,5 +1,6 @@
-from typing import AsyncIterator, Dict, Any, TYPE_CHECKING
+from typing import AsyncIterator, Dict, Any, TYPE_CHECKING, Optional
 from ..base import BatchProcessor, DataBatch
+from ...core.models import DataStorage
 
 if TYPE_CHECKING:
     from ...sync.sync_engine import SyncEngine
@@ -8,7 +9,7 @@ if TYPE_CHECKING:
 class EnrichStage(BatchProcessor):
     """Stage that enriches data using the enrichment engine"""
     
-    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None):
+    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None):
         super().__init__("enrich", config, logger)
         self.sync_engine = sync_engine
     

@@ -1,11 +1,11 @@
-from typing import AsyncIterator, Dict, Any, List, Callable
+from typing import AsyncIterator, Dict, Any, List, Callable, Optional
 from ..base import BatchProcessor, DataBatch
-
+from ...core.models import DataStorage
 
 class TransformStage(BatchProcessor):
     """Stage that applies data transformations"""
     
-    def __init__(self, config: Dict[str, Any] = None, logger=None):
+    def __init__(self, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None):
         super().__init__("transform", config, logger)
         self.transformations = self._build_transformations()
     

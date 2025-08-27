@@ -7,38 +7,38 @@ from synctool.core.models import SyncStrategy
 
 class ColumnSchema:
     def __init__(self, columns: List[Column]):
-        self.columns = columns
-        self.column_map = {c.name: c for c in columns}
+        self.columns = sorted(columns, key=lambda x: x.name)
+        self.column_map = {c.name: c for c in self.columns}
 
     @cached_property
     def partition_key(self) -> Column:
         for c in self.columns:
-            if c.has_role("partition_key"):
+            if c.partition_key:
                 return c
         raise ValueError("No partition key found in column schema")
 
     @cached_property
-    def order_keys(self) -> List[Tuple[Column, str]] | None:
+    def order_keys(self) -> List[Column] | None:
         """
         Returns the first column with an order_key role and its direction ('asc' or 'desc').
         """
-        return [(c, c.get_order_direction()) for c in self.columns if c.has_role("order_key")] or None
+        return [c for c in self.columns if c.order_key] or None
 
     @cached_property
     def delta_key(self) -> Optional[Column]:
         for c in self.columns:
-            if c.has_role("delta_key"):
+            if c.delta_key:
                 return c
         return None
 
     @cached_property
     def unique_keys(self) -> List[Column]:
-        return [c for c in self.columns if c.has_role("unique_key")]
+        return [c for c in self.columns if c.unique_key]
 
     @cached_property
-    def hash_key(self) -> Column:
+    def hash_key(self) -> Column|None:
         for c in self.columns:
-            if c.has_role("hash_key"):
+            if c.hash_key:
                 return c
         return None
     
@@ -47,11 +47,14 @@ class ColumnSchema:
 
     def columns_to_fetch(self) -> List[Column]:
         """Returns list of source expressions (expr) or names if expr missing."""
-        return self.columns
+        return [c for c in self.columns if c.data_field]
+    
+    def columns_to_hash(self) -> List[Column]:
+        return [c for c in self.columns if c.hash_field]
 
     def columns_to_insert(self) -> List[Column]:
         """Returns list of column names to be inserted (insert==True)."""
-        return [c for c in self.columns if c.insert]
+        return [c for c in self.columns if c.data_field]
     
     def transform_data(self, data: list[dict[str, Any]]) -> list[dict[str, Any]]:
         new_data = {}
@@ -66,9 +69,18 @@ class ColumnSchema:
 
 
 class ColumnMapper:
-    def __init__(self, field_map: List[Dict[str, Any]]):
-        self.field_map = field_map
-        self.schemas = {}
+    def __init__(self, fields: List[Dict[str, Any]]):
+        self.field_map = {f['name']: f for f in fields}
+        self.schema = self.build_schema(fields)
+
+    def build_schema(self, field_map: List[Dict[str, Any]]) -> ColumnSchema:
+        columns = []
+        for f in field_map:
+            if f['name'] in self.field_map:
+                obj = f.copy()
+                obj.update(self.field_map[f['name']])
+                columns.append(Column(**obj))
+        return ColumnSchema(columns)
 
     def build_schemas(self, strategies: List[StrategyConfig], enrichment_engine: Optional[EnrichmentEngine]=None) -> Dict[str, ColumnSchema]:
         """

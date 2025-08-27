@@ -1,7 +1,8 @@
-from typing import AsyncIterator, Dict, Any, TYPE_CHECKING
+from typing import AsyncIterator, Dict, Any, TYPE_CHECKING, Optional
 from ..base import BatchProcessor, DataBatch
 from ...utils.data_comparator import calculate_row_status
 from ...core.enums import DataStatus
+from ...core.models import DataStorage
 
 if TYPE_CHECKING:
     from ...sync.sync_engine import SyncEngine
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
 class DataFetchStage(BatchProcessor):
     """Stage that fetches data from source systems"""
     
-    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None):
+    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None):
         super().__init__("data_fetch", config, logger)
         self.sync_engine = sync_engine
         self.page_size = self.config.get('page_size', 1000)
