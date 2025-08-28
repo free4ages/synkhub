@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from ..monitoring.metrics_storage import MetricsStorage
     from ..scheduler.redis_lock_manager import RedisLockManager
 
-from ..core.models import SyncJobConfig, SyncProgress, DataStorage
+from ..core.models import PipelineJobConfig, SyncProgress, DataStorage
 from ..monitoring.metrics_collector import MetricsCollector
 from ..monitoring.logging_collector import LoggingCollector
 from ..monitoring.logs_storage import LogsStorage
@@ -30,7 +30,7 @@ class SyncJobManager:
         self.job_semaphore = asyncio.Semaphore(max_concurrent_jobs)
         self.logger = logging.getLogger(f"{__name__}.SyncJobManager")
     
-    async def run_sync_job(self, config: SyncJobConfig, 
+    async def run_sync_job(self, config: PipelineJobConfig, 
                           strategy_name: Optional[str] = None,
                           start: Any = None, 
                           end: Any = None,
@@ -57,7 +57,7 @@ class SyncJobManager:
             # Run without locking
             return await self._execute_job(config, strategy_name, start, end, progress_callback)
     
-    async def _execute_job(self, config: SyncJobConfig, 
+    async def _execute_job(self, config: PipelineJobConfig, 
                           strategy_name: str,
                           start: Any = None, 
                           end: Any = None,
@@ -119,7 +119,7 @@ class SyncJobManager:
                 logging_collector.stop_job_run()
         return result
     
-    async def run_multiple_jobs(self, configs: List[SyncJobConfig],
+    async def run_multiple_jobs(self, configs: List[PipelineJobConfig],
                                progress_callback: Optional[Callable[[str, SyncProgress], None]] = None) -> Dict[str, Dict[str, Any]]:
         """Run multiple sync jobs concurrently"""
         

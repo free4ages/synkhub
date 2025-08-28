@@ -12,14 +12,14 @@ Main modules:
 
 import asyncio
 import logging
-from .core.models import SyncJobConfig, SyncProgress
+from .core.models import PipelineJobConfig, SyncProgress
 from .sync.sync_engine import SyncEngine
 from .sync.sync_job_manager import SyncJobManager
 from .config.config_loader import ConfigLoader
 
 __version__ = "1.0.0"
 __all__ = [
-    'SyncJobConfig',
+    'PipelineJobConfig',
     'SyncProgress', 
     'SyncEngine',
     'SyncJobManager',

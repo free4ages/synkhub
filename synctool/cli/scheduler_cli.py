@@ -106,7 +106,7 @@ class SchedulerCLI:
     
     async def run_job(self, args):
         """Run a specific job manually"""
-        import pdb;pdb.set_trace()
+        import pdb; pdb.set_trace()
         config = SchedulerConfig(
             config_dir=args.config_dir,
             metrics_dir=args.metrics_dir
@@ -116,7 +116,7 @@ class SchedulerCLI:
         
         try:
             # Load datastores first
-            await scheduler.load_datastores()
+            # await scheduler.load_datastores()
             await scheduler.load_configs()
             job_config = scheduler.get_job_config(args.job_name)
             

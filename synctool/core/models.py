@@ -115,13 +115,13 @@ class DataStorage:
         return [ds for ds in self.datastores.values() if ds.type == store_type]
 
 
-@dataclass
-class ColumnConfig:
-    """Column configuration for source to destination mapping"""
-    name: str
-    dest: Optional[str] = None
-    insert: bool = True
-    transform: Optional[str] = None
+# @dataclass
+# class ColumnConfig:
+#     """Column configuration for source to destination mapping"""
+#     name: str
+#     dest: Optional[str] = None
+#     insert: bool = True
+#     transform: Optional[str] = None
 
 
 @dataclass
@@ -181,6 +181,8 @@ class StrategyConfig:
     # Also prevents sub partitions from being created in hash strategy.
     page_size: int = 1000
     cron: Optional[str] = None  # Cron expression for scheduling
+    partition_key: Optional[str] = None  # Column to use for partitioning
+    partition_step: Optional[int] = None  # Step size for partitioning
     
     # New pipeline configuration
     pipeline_config: Optional[Dict[str, Any]] = None
@@ -190,7 +192,7 @@ class StrategyConfig:
 class TransformationConfig:
     """Transformation configuration"""
     transform: str
-    dest: str
+    expr: str
     dtype: Optional[str] = None
     columns: Optional[List[str]] = field(default_factory=list)
 
@@ -279,51 +281,6 @@ class SyncProgress:
         self.data_query_count += data_query_count
 
 @dataclass
-class BackendConfig:
-    """Provider configuration"""
-    type: str
-    datastore_name: str  # Reference to DataStore name instead of direct connection
-    table: Optional[str] = None
-    schema: Optional[str] = None
-    alias: Optional[str] = None
-    join: List[Dict[str, Any]] = field(default_factory=list)
-    filters: List[str] = field(default_factory=list)
-    supports_update: bool = True
-    backend: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-
-# @dataclass
-# class ProviderConfig:
-#     """Provider configuration"""
-#     data_backend: BackendConfig
-#     state_backend: Optional[BackendConfig]
-
-
-@dataclass
-class SyncJobConfig:
-    """Complete sync job configuration"""
-    name: str
-    description: str
-    columns: List[Dict[str, Any]] = field(default_factory=list)
-    stages: List[Dict[str, Any]] = field(default_factory=list)
-    # partition_step: int
-    # partition_key: str
-    # source_provider: ProviderConfig
-    # destination_provider: ProviderConfig
-    # # Column mapping configuration
-    # column_map: List[Dict[str, Any]]
-    # strategies: List[Dict[str, Any]] = field(default_factory=list)
-    # enrichment: Optional[Dict[str, Any]] = None
-    # hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
-    # partition_prefix_length: int = 2
-
-    # Concurrency settings
-    max_concurrent_partitions: int = 4
-
-
-
-
-@dataclass
 class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
@@ -336,31 +293,86 @@ class Column:
     delta_key: bool = False
     partition_key: bool = False
     hash_key: bool = False
-
-    # def get_order_direction(self) -> Optional[str]:
-    #     """
-    #     Parses order_key role to return sorting direction if any.
-    #     Example: 'order_key[asc]' -> 'asc'
-    #     """
-    #     for role in self.roles:
-    #         if role.startswith("order_key"):
-    #             # Extract direction in brackets if exists
-    #             if "[" in role and role.endswith("]"):
-    #                 return role[role.index("[")+1 : -1].lower()
-    #             return "asc"  # default if no direction specified
-    #     return None
-
-    # def has_role(self, role_name: str) -> bool:
-    #     """Checks if this column has a role (prefix match)."""
-    #     return any(r.startswith(role_name) for r in self.roles)
-    
-    # def is_enriched_column(self) -> bool:
-    #     return self.has_role("enriched_key")
     
     def cast(self, value: Any) -> Any:
         if not self.dtype:
             return value
         return cast_value(value, self.dtype)
+
+@dataclass
+class BackendConfig:
+    """Provider configuration"""
+    type: str
+    datastore_name: str  # Reference to DataStore name instead of direct connection
+    table: Optional[str] = None
+    schema: Optional[str] = None
+    alias: Optional[str] = None
+    join: List[JoinConfig] = field(default_factory=list)
+    filters: List[FilterConfig] = field(default_factory=list)
+    columns: List[Column] = field(default_factory=list)
+    config: Optional[Dict[str, Any]] = None
+    hash_cache: Optional[Dict[str, Any]] = None
+    index_cache: Optional[Dict[str, Any]] = None
+    supports_update: bool = False  # Whether the backend supports update operations
+
+# @dataclass
+# class ProviderConfig:
+#     """Provider configuration"""
+#     data_backend: BackendConfig
+#     state_backend: Optional[BackendConfig]
+
+
+
+@dataclass
+class GlobalStageConfig:
+    """Configuration for a single pipeline stage"""
+    name: str
+    type: Optional[str] = None
+    enabled: bool = True
+    source: Optional[BackendConfig] = None
+    destination: Optional[BackendConfig] = None
+    config: Optional[Dict[str, Any]] = None
+    class_path: Optional[str] = None
+    columns: List[Column] = field(default_factory=list)
+    transformations: List[TransformationConfig] = field(default_factory=list)
+    page_size: Optional[int] = None
+    strategies: List[StrategyConfig] = field(default_factory=list)
+    max_concurrent_partitions: int = 1
+    target_batch_size: Optional[int] = None  # For batcher stages
+    use_pagination: Optional[bool] = None  # For data fetch stages
+
+# @dataclass
+# class SyncJobConfig:
+#     """Complete sync job configuration"""
+#     name: str
+#     description: str
+#     columns: List[Column] = field(default_factory=list)
+#     stages: List[GlobalStageConfig] = field(default_factory=list)
+
+
+@dataclass
+class PipelineJobConfig:
+    """Complete pipeline-based sync job configuration"""
+    name: str
+    description: str
+    columns: List[Column] = field(default_factory=list)
+    stages: List[GlobalStageConfig] = field(default_factory=list)
+    
+
+@dataclass
+class JobContext:
+    """Context for the entire sync job - not tied to a specific partition or strategy"""
+    job_name: str
+    user_strategy_name: Optional[str] = None  # Strategy name requested by user
+    user_start: Any = None  # Start bounds requested by user
+    user_end: Any = None    # End bounds requested by user
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+
+
+
+
 
 
 @dataclass

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Callable, Any
 
-from .core import SyncJobConfig, SyncProgress
+from .core import PipelineJobConfig, SyncProgress
 from .engine import SyncEngine
 
 
@@ -15,7 +15,7 @@ class SyncJobManager:
         self.job_semaphore = asyncio.Semaphore(max_concurrent_jobs)
         self.logger = logging.getLogger(f"{__name__}.SyncJobManager")
     
-    async def run_sync_job(self, config: SyncJobConfig, 
+    async def run_sync_job(self, config: PipelineJobConfig, 
                           strategy: Optional[str] = None,
                           start: Any = None, 
                           end: Any = None,
@@ -55,7 +55,7 @@ class SyncJobManager:
                 if job_name in self.active_jobs:
                     del self.active_jobs[job_name]
     
-    async def run_multiple_jobs(self, configs: List[SyncJobConfig],
+    async def run_multiple_jobs(self, configs: List[PipelineJobConfig],
                                progress_callback: Optional[Callable[[str, SyncProgress], None]] = None) -> Dict[str, Dict[str, Any]]:
         """Run multiple sync jobs concurrently"""
         

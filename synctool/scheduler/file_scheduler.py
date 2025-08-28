@@ -8,7 +8,7 @@ from croniter import croniter
 from datetime import datetime, timedelta
 
 from ..config.config_loader import ConfigLoader
-from ..core.models import SyncJobConfig, SchedulerConfig, DataStorage, DataStore
+from ..core.models import PipelineJobConfig, SchedulerConfig, DataStorage, DataStore
 from ..sync.sync_job_manager import SyncJobManager
 from ..monitoring.metrics_storage import MetricsStorage
 from ..monitoring.logs_storage import LogsStorage
@@ -22,7 +22,7 @@ class FileBasedScheduler:
         self.config = scheduler_config
         self.logger = logging.getLogger(__name__)
         self.running = False
-        self.job_configs: Dict[str, SyncJobConfig] = {}
+        self.job_configs: Dict[str, PipelineJobConfig] = {}
         self.data_storage: Optional[DataStorage] = None
         
         # Initialize components
@@ -154,7 +154,7 @@ class FileBasedScheduler:
             except Exception as e:
                 self.logger.error(f"Failed to load config from {config_file}: {e}")
     
-    def _validate_datastore_references(self, job_config: SyncJobConfig) -> List[str]:
+    def _validate_datastore_references(self, job_config: PipelineJobConfig) -> List[str]:
         """Validate that all referenced datastores exist"""
         issues = []
         
@@ -162,19 +162,19 @@ class FileBasedScheduler:
             issues.append("No datastores configuration loaded")
             return issues
         
-        # Check source provider datastore
-        if job_config.source_provider and job_config.source_provider.data_backend:
-            if hasattr(job_config.source_provider.data_backend, 'datastore_name'):
-                datastore_name = job_config.source_provider.data_backend.datastore_name
+        # Check all stages for datastore references
+        for stage in job_config.stages:
+            # Check source backend datastore
+            if stage.source and stage.source.datastore_name:
+                datastore_name = stage.source.datastore_name
                 if not self.data_storage.get_datastore(datastore_name):
-                    issues.append(f"Source provider references unknown datastore: {datastore_name}")
-        
-        # Check destination provider datastore
-        if job_config.destination_provider and job_config.destination_provider.data_backend:
-            if hasattr(job_config.destination_provider.data_backend, 'datastore_name'):
-                datastore_name = job_config.destination_provider.data_backend.datastore_name
+                    issues.append(f"Stage '{stage.name}' source references unknown datastore: {datastore_name}")
+            
+            # Check destination backend datastore
+            if stage.destination and stage.destination.datastore_name:
+                datastore_name = stage.destination.datastore_name
                 if not self.data_storage.get_datastore(datastore_name):
-                    issues.append(f"Destination provider references unknown datastore: {datastore_name}")
+                    issues.append(f"Stage '{stage.name}' destination references unknown datastore: {datastore_name}")
         
         return issues
     
@@ -183,22 +183,24 @@ class FileBasedScheduler:
         current_time = datetime.now()
         
         for job_name, job_config in self.job_configs.items():
-            for strategy_config in job_config.strategies:
-                if not strategy_config.get('enabled', True):
-                    continue
-                
-                cron_expr = strategy_config.get('cron')
-                if not cron_expr:
-                    continue
-                
-                strategy_name = strategy_config['name']
-                strategy_key = f"{job_name}:{strategy_name}"
-                
-                # Check if it's time to run this strategy
-                if self._should_run_strategy(strategy_key, cron_expr, current_time):
-                    # Schedule the job (job_manager handles locking)
-                    if self.job_manager:
-                        asyncio.create_task(self._run_job(job_config, strategy_name))
+            # Iterate through stages to find strategies
+            for stage in job_config.stages:
+                for strategy_config in stage.strategies:
+                    if not strategy_config.enabled:
+                        continue
+                    
+                    cron_expr = strategy_config.cron
+                    if not cron_expr:
+                        continue
+                    
+                    strategy_name = strategy_config.name
+                    strategy_key = f"{job_name}:{strategy_name}"
+                    
+                    # Check if it's time to run this strategy
+                    if self._should_run_strategy(strategy_key, cron_expr, current_time):
+                        # Schedule the job (job_manager handles locking)
+                        if self.job_manager:
+                            asyncio.create_task(self._run_job(job_config, strategy_name))
     
     def _should_run_strategy(self, strategy_key: str, cron_expr: str, current_time: datetime) -> bool:
         """Check if a strategy should run based on its cron expression"""
@@ -218,7 +220,7 @@ class FileBasedScheduler:
             self.logger.error(f"Invalid cron expression '{cron_expr}' for {strategy_key}: {e}")
             return False
     
-    async def _run_job(self, job_config: SyncJobConfig, strategy_name: str):
+    async def _run_job(self, job_config: PipelineJobConfig, strategy_name: str):
         """Run a single job with the specified strategy"""
         job_name = job_config.name
         strategy_key = f"{job_name}:{strategy_name}"
@@ -243,11 +245,11 @@ class FileBasedScheduler:
             self.logger.error(f"Failed to run scheduled job {job_name}:{strategy_name}: {e}")
 
     
-    def get_job_configs(self) -> Dict[str, SyncJobConfig]:
+    def get_job_configs(self) -> Dict[str, PipelineJobConfig]:
         """Get all loaded job configurations"""
         return self.job_configs.copy()
     
-    def get_job_config(self, job_name: str) -> Optional[SyncJobConfig]:
+    def get_job_config(self, job_name: str) -> Optional[PipelineJobConfig]:
         """Get a specific job configuration"""
         return self.job_configs.get(job_name)
     
