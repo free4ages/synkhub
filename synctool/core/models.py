@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from dataclasses import dataclass, field
+# from tkinter import W
 from typing import Dict, List, Literal, Optional, Any, Union, Tuple, Callable, Set
 from datetime import datetime
 from .enums import HashAlgo, SyncStrategy, PartitionType, BackendType, Capability
@@ -142,11 +143,11 @@ class FilterConfig:
 # @dataclass
 # class ColumnMapping:
 #     """Column mapping for keys and hashes"""
-#     unique_key: List[str] = field(default_factory=list)
-#     partition_key: Optional[str] = None
+#     unique_column: List[str] = field(default_factory=list)
+#     partition_column: Optional[str] = None
 #     row_hash_key: Optional[str] = None
-#     delta_key: Optional[str] = None
-#     order_key: Optional[str] = None
+#     delta_column: Optional[str] = None
+#     order_column: Optional[str] = None
 
 
 @dataclass
@@ -155,10 +156,12 @@ class StrategyConfig:
     name: str
     type: SyncStrategy
     enabled: bool = True
-    column: str = ""
-    column_type: Optional[str] = None
+    default: bool = True
+    partition_column: str = ""
+    partition_column_type: Optional[str] = None
+    max_concurrent_partitions: int = 1
     # if true, will create sub partitions for each partition. Only available for delta and full strategies.
-    use_sub_partitions: bool = True   
+    use_sub_partition: bool = True   
     # step size for sub partitions. Only available for delta and full strategies.
     sub_partition_step: int = 100 
     # minimum step size for sub partitions. Only available for hash strategies.
@@ -181,7 +184,7 @@ class StrategyConfig:
     # Also prevents sub partitions from being created in hash strategy.
     page_size: int = 1000
     cron: Optional[str] = None  # Cron expression for scheduling
-    partition_key: Optional[str] = None  # Column to use for partitioning
+    # partition_column: Optional[str] = None  # Column to use for partitioning
     partition_step: Optional[int] = None  # Step size for partitioning
     
     # New pipeline configuration
@@ -191,7 +194,7 @@ class StrategyConfig:
 @dataclass
 class TransformationConfig:
     """Transformation configuration"""
-    transform: str
+    transform: Union[str, Callable]
     expr: str
     dtype: Optional[str] = None
     columns: Optional[List[str]] = field(default_factory=list)
@@ -248,50 +251,65 @@ class SyncProgress:
     total_partitions: int = 0
     completed_partitions: int = 0
     failed_partitions: int = 0
+    processed_partitions: int = 0
+    skipped_partitions: int = 0
     rows_fetched: int = 0   # Total rows fetched from the source
     rows_detected: int = 0    # Total rows detected in the partition
     rows_inserted: int = 0    # Total rows inserted in the partition
     rows_updated: int = 0    # Total rows updated in the partition
     rows_deleted: int = 0
-    start_time: Optional[datetime] = None
+    rows_failed: int = 0
+    total_primary_partitions: int = 0
+    detection_query_count: int = 0
     hash_query_count: int = 0
     data_query_count: int = 0
+    start_time: Optional[datetime] = None
 
     def update_progress(self, 
-        completed: bool = False, 
-        failed: bool = False, 
+        completed_partitions: int = 0,
+        failed_partitions: int = 0,
+        skipped_partitions: int = 0,
+        processed_partitions: int = 0,
+        total_partitions: int = 0,
         rows_detected: int = 0, 
         rows_fetched: int = 0,
         rows_inserted: int = 0, 
         rows_updated: int = 0, 
         rows_deleted: int = 0,
+        rows_failed: int = 0,
+        total_primary_partitions: int = 0,
+        detection_query_count: int = 0,
         hash_query_count: int = 0,
-        data_query_count: int = 0,
+        data_query_count: int = 0
     ):
-        if completed:
-            self.completed_partitions += 1
-        if failed:
-            self.failed_partitions += 1
+        self.completed_partitions += completed_partitions
+        self.failed_partitions += failed_partitions
+        self.skipped_partitions += skipped_partitions
+        self.processed_partitions += processed_partitions
+        self.total_partitions += total_partitions
         self.rows_detected += rows_detected
         self.rows_inserted += rows_inserted
         self.rows_updated += rows_updated
         self.rows_deleted += rows_deleted
         self.rows_fetched += rows_fetched
+        self.rows_failed += rows_failed
+        self.total_primary_partitions += total_primary_partitions
+        self.detection_query_count += detection_query_count
         self.hash_query_count += hash_query_count
         self.data_query_count += data_query_count
-
+        
 @dataclass
 class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
     dtype: Optional[UniversalDataType] = None
-    hash_field: bool = True
-    data_field: bool = True
-    unique_key: bool = False
-    order_key: bool = False
+    hash_column: bool = True
+    data_column: bool = True
+    unique_column: bool = False
+    order_column: bool = False
     direction: str = "asc"
-    delta_key: bool = False
-    partition_key: bool = False
+    delta_column: bool = False
+    partition_column: bool = False
     hash_key: bool = False
     
     def cast(self, value: Any) -> Any:
@@ -304,6 +322,7 @@ class BackendConfig:
     """Provider configuration"""
     type: str
     datastore_name: str  # Reference to DataStore name instead of direct connection
+    name: Optional[str] = None
     table: Optional[str] = None
     schema: Optional[str] = None
     alias: Optional[str] = None
@@ -330,16 +349,13 @@ class GlobalStageConfig:
     type: Optional[str] = None
     enabled: bool = True
     source: Optional[BackendConfig] = None
+    hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
     destination: Optional[BackendConfig] = None
     config: Optional[Dict[str, Any]] = None
     class_path: Optional[str] = None
     columns: List[Column] = field(default_factory=list)
     transformations: List[TransformationConfig] = field(default_factory=list)
-    page_size: Optional[int] = None
     strategies: List[StrategyConfig] = field(default_factory=list)
-    max_concurrent_partitions: int = 1
-    target_batch_size: Optional[int] = None  # For batcher stages
-    use_pagination: Optional[bool] = None  # For data fetch stages
 
 # @dataclass
 # class SyncJobConfig:
@@ -355,8 +371,12 @@ class PipelineJobConfig:
     """Complete pipeline-based sync job configuration"""
     name: str
     description: str
+    hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
+    backends: List[BackendConfig] = field(default_factory=list)
     columns: List[Column] = field(default_factory=list)
+    strategies: List[StrategyConfig] = field(default_factory=list)
     stages: List[GlobalStageConfig] = field(default_factory=list)
+    max_concurrent_partitions: int = 1
     
 
 @dataclass

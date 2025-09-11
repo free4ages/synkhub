@@ -98,7 +98,7 @@ async def get_job_detail(
         job_detail = JobDetail(
             name=job_config.name,
             description=job_config.description,
-            partition_key=job_config.partition_key,
+            partition_column=job_config.partition_column,
             partition_step=job_config.partition_step,
             max_concurrent_partitions=job_config.max_concurrent_partitions,
             strategies=strategy_details,

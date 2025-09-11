@@ -24,14 +24,14 @@ class StrategyDetail(BaseModel):
     sub_partition_step: int
     page_size: Optional[int] = None
     use_pagination: bool = False
-    use_sub_partitions: bool = True
+    use_sub_partition: bool = True
 
 
 class JobDetail(BaseModel):
     """Detailed job configuration"""
     name: str
     description: str
-    partition_key: str
+    partition_column: str
     partition_step: int
     max_concurrent_partitions: int
     strategies: List[StrategyDetail]

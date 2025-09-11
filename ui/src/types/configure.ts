@@ -43,11 +43,11 @@ export interface ColumnMapping {
   src?: string;           // Source expression (e.g., "u.id", "p.email")
   dest?: string;          // Destination column name
   dtype?: string;         // Data type for the column
-  unique_key: boolean;    // Used for identifying records during sync (upserts, conflict resolution)
-  order_key: boolean;     // Used for sorting data during sync operations
+  unique_column: boolean;    // Used for identifying records during sync (upserts, conflict resolution)
+  order_column: boolean;     // Used for sorting data during sync operations
   hash_key: boolean;      // Used for calculating row/block hashes for change detection
   insert: boolean;        // Whether this column should be inserted into destination
-  direction?: string;     // Sort direction for order_key (asc/desc)
+  direction?: string;     // Sort direction for order_column (asc/desc)
 }
 
 export interface FilterCondition {
@@ -90,7 +90,7 @@ export interface MigrationConfig {
   source_provider: any;
   destination_provider: any;
   column_map: ColumnMapping[];
-  partition_key?: string;    // Column used for partitioning data during sync
+  partition_column?: string;    // Column used for partitioning data during sync
   partition_step?: number;   // Number of records per partition
   // New fields for enhanced functionality
   source_filters?: FilterCondition[];

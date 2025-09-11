@@ -20,8 +20,8 @@ column_map:
   - name: 'id'
     src: 'id'
     dest: 'id'
-    unique_key: true
-    order_key: true
+    unique_column: true
+    order_column: true
     dtype: 'int'
   - name: 'name'
     src: 'name'
@@ -32,7 +32,7 @@ column_map:
     dest: 'updated_at'
     dtype: 'timestamp'
 
-partition_key: 'id'
+partition_column: 'id'
 partition_step: 1000
 
 strategies:

@@ -4,14 +4,16 @@ from ...core.models import DataStorage
 
 if TYPE_CHECKING:
     from ...sync.sync_engine import SyncEngine
+    from ...utils.progress_manager import ProgressManager
 
 
 class EnrichStage(BatchProcessor):
     """Stage that enriches data using the enrichment engine"""
     
-    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None):
+    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
         super().__init__("enrich", config, logger)
         self.sync_engine = sync_engine
+        self.progress_manager = progress_manager
     
     def should_process(self, context) -> bool:
         """Only process if enrichment engine is available"""

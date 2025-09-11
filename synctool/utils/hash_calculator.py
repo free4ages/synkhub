@@ -30,10 +30,10 @@ class HashCalculator:
         return hashlib.md5(combined.encode()).hexdigest()
     
     @staticmethod
-    async def calculate_data_hashes(data: pd.DataFrame, unique_keys: List[str]) -> pd.DataFrame:
+    async def calculate_data_hashes(data: pd.DataFrame, unique_columns: List[str]) -> pd.DataFrame:
         """Calculate row hashes for entire dataframe"""
         def calc_hash(row):
-            values = [str(row[col]) for col in unique_keys if col in row]
+            values = [str(row[col]) for col in unique_columns if col in row]
             combined = "|".join(values)
             return hashlib.md5(combined.encode()).hexdigest()
         

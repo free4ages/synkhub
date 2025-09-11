@@ -25,8 +25,8 @@ class ColumnMapping(BaseModel):
     src: Optional[str] = None
     dest: Optional[str] = None
     dtype: Optional[str] = None
-    unique_key: bool = False  # For sync operations, not database constraints
-    order_key: bool = False
+    unique_column: bool = False  # For sync operations, not database constraints
+    order_column: bool = False
     hash_key: bool = False
     insert: bool = True
     direction: Optional[str] = "asc"
@@ -37,7 +37,7 @@ class MigrationConfig(BaseModel):
     source_provider: Dict[str, Any]
     destination_provider: Dict[str, Any]
     column_map: List[ColumnMapping]
-    partition_key: Optional[str] = None
+    partition_column: Optional[str] = None
     partition_step: Optional[int] = None
 
 class DDLGenerationRequest(BaseModel):
@@ -177,12 +177,12 @@ async def validate_config(config: MigrationConfig):
             errors.append("At least one column mapping is required")
         
         # Check for required columns
-        has_unique_key = any(col.unique_key for col in config.column_map)
-        if not has_unique_key:
+        has_unique_column = any(col.unique_column for col in config.column_map)
+        if not has_unique_column:
             errors.append("At least one unique key is required for sync operations")
         
-        if config.partition_key and not any(col.name == config.partition_key for col in config.column_map):
-            errors.append(f"Partition key '{config.partition_key}' not found in column map")
+        if config.partition_column and not any(col.name == config.partition_column for col in config.column_map):
+            errors.append(f"Partition key '{config.partition_column}' not found in column map")
         
         return {
             'valid': len(errors) == 0,
@@ -205,11 +205,11 @@ def _generate_suggested_config(universal_schema, source_connection: DatabaseConn
             'src': col.name,  # Default to same name
             'dest': col.name,
             'dtype': col.data_type.value,
-            'unique_key': col.primary_key,  # Suggest primary keys as unique keys for sync
-            'order_key': col.primary_key,   # Suggest primary keys as order keys
+            'unique_column': col.primary_key,  # Suggest primary keys as unique keys for sync
+            'order_column': col.primary_key,   # Suggest primary keys as order keys
             'hash_key': False,  # Default to false
             'insert': True,
-            'direction': 'asc' if col.primary_key else None  # 'asc' if order_key is True, else null
+            'direction': 'asc' if col.primary_key else None  # 'asc' if order_column is True, else null
         }
         column_map.append(column_mapping)
     
@@ -219,8 +219,8 @@ def _generate_suggested_config(universal_schema, source_connection: DatabaseConn
         'src': None,  # Computed column
         'dest': 'checksum',
         'dtype': 'varchar',
-        'unique_key': False,
-        'order_key': False,
+        'unique_column': False,
+        'order_column': False,
         'hash_key': True,  # This is the hash key for change detection
         'insert': True,
         'direction': None  # No direction for hash key column
@@ -258,7 +258,7 @@ def _generate_suggested_config(universal_schema, source_connection: DatabaseConn
             }
         },
         'column_map': column_map,
-        'partition_key': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
+        'partition_column': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
         'partition_step': 1000
     }
 
@@ -273,8 +273,8 @@ def _config_to_universal_schema(config: MigrationConfig):
             name=col_mapping.dest or col_mapping.name,
             data_type=UniversalDataType(col_mapping.dtype) if col_mapping.dtype else UniversalDataType.TEXT,
             nullable=True,
-            primary_key=col_mapping.unique_key,  # For sync operations
-            unique=col_mapping.unique_key,
+            primary_key=col_mapping.unique_column,  # For sync operations
+            unique=col_mapping.unique_column,
             auto_increment=False
         )
         columns.append(column)

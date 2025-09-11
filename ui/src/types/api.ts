@@ -23,7 +23,7 @@ export interface StrategyDetail {
 export interface JobDetail {
   name: string;
   description: string;
-  partition_key: string;
+  partition_column: string;
   partition_step: number;
   max_concurrent_partitions: number;
   strategies: StrategyDetail[];

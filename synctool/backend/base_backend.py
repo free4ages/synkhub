@@ -185,10 +185,9 @@ class BaseBackend(ABC):
 
 
 class Backend(BaseBackend):
-    _config_class = BackendConfig
-    def __init__(self, config: Dict[str, Any], column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
-        self.config = self._config_class(**config)
-        self.provider_type = BackendType(self.config.type)
+    def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
+        self.config = config
+        # self.provider_type = BackendType(self.config.type)
         
         # Debug logging
         if logger:
@@ -218,13 +217,13 @@ class Backend(BaseBackend):
         self.alias = self.config.alias
         self.schema = self.config.schema or self.connection_config.schema or self._get_default_schema()
         # Removed: self.columns = [ColumnConfig(**col) for col in config.columns] if config.columns else []
-        self.joins = [JoinConfig(**join) for join in self.config.join] if self.config.join else []
+        self.joins = self.config.join if self.config.join else []
         # Fix filter parsing - config.filters should be List[Dict] not List[str]
-        self.filters = [FilterConfig(**filter) for filter in (self.config.filters or []) if isinstance(filter, dict)]
+        self.filters = self.config.filters if self.config.filters else []
         self.supports_update = config.supports_update
         # Removed: self.column_mapping = ColumnMapping(**config.column_mapping) if config.column_mapping else ColumnMapping()
         self.column_schema = column_schema  # New: ColumnSchema instance
-        self.backend = config.backend
+        # self.backend = config.backend
         self.provider_config = config.config or {}
         logger_name = f"{logger.name}.backend.{self.config.type}" if logger else f"{__name__}.{self.config.type}"
         self.logger = logging.getLogger(logger_name)
@@ -281,9 +280,9 @@ class SqlBackend(Backend):
 
     
     async def get_partition_bounds(self) -> Tuple[Any, Any]:
-        if not self.column_schema or not self.column_schema.partition_key:
+        if not self.column_schema or not self.column_schema.partition_column:
             raise ValueError("No partition key configured in column schema")
-        column = self.column_schema.partition_key.expr
+        column = self.column_schema.partition_column.expr
         """Get min and max values for partition column"""
         query = f"SELECT MIN({column}) as min_val, MAX({column}) as max_val FROM {self.table}"
         result = await self.execute_query(query)
@@ -291,18 +290,18 @@ class SqlBackend(Backend):
     
     async def get_last_sync_point(self) -> Any:
         """Get the last sync point for a specific column type"""
-        if not self.column_schema or not self.column_schema.delta_key:
+        if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key configured in column schema")
-        column = self.column_schema.delta_key.expr
+        column = self.column_schema.delta_column.expr
         query = f"SELECT MAX({column}) as last_sync_point FROM {self.table}"
         result = await self.execute_query(query)
         return result[0]['last_sync_point']
 
     async def get_max_sync_point(self) -> Any:
         """Get the maximum sync point for a specific column type"""
-        if not self.column_schema or not self.column_schema.delta_key:
+        if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key configured in column schema")
-        column = self.column_schema.delta_key.expr
+        column = self.column_schema.delta_column.expr
         query = f"SELECT MAX({column}) as max_sync_point FROM {self.table}"
         result = await self.execute_query(query)
         return result[0]['max_sync_point']
@@ -347,11 +346,11 @@ class SqlBackend(Backend):
             final.append(self.column_schema.transform_data(d))
         return final
     
-    def _build_partition_data_query(self, partition: Partition, partition_column=None, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
+    def _build_partition_data_query(self, partition: Partition, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
         filters = self._build_filter_query()
-        if not self.column_schema or not self.column_schema.partition_key:
-            raise ValueError("No partition key configured in column schema")
-        partition_column = partition_column or self.column_schema.partition_key.name
+        # if not self.column_schema or not self.column_schema.partition_column:
+        #     raise ValueError("No partition key configured in column schema")
+        partition_column = partition.column or self.column_schema.partition_column.name
         column: Column = self.column_schema.column(partition_column)
 
         filters.extend([     
@@ -362,8 +361,8 @@ class SqlBackend(Backend):
         # Add pagination if specified
         limit = page_size if page_size is not None else None
 
-        return Query(
-            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns),
+        query = Query(
+            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns,partition_id=partition.partition_id),
             table= self._build_table_query(),
             joins= self._build_join_query(),
             filters= filters,
@@ -371,9 +370,10 @@ class SqlBackend(Backend):
             offset=offset,
             order_by=order_by
         )
+        return query
     
     
-    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None):
+    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None, partition_id:str=None):
         select = []
         if not self.column_schema:
             raise ValueError("No column schema configured")
@@ -383,6 +383,9 @@ class SqlBackend(Backend):
         for col in columns_to_fetch:
             select.append(Field(expr=col.expr or col.name, alias=col.name))
         
+        if partition_id:
+            select.append(Field(expr=f"'{partition_id}'", alias='partition__'))
+        
         if with_hash:
             hash_column = self.column_schema.hash_key
             if hash_column:
@@ -390,8 +393,8 @@ class SqlBackend(Backend):
                 select.append(Field(expr=hash_column.expr, alias='hash__'))
             else:
                 # Generate hash from all columns
-                hash_fields = [Field(expr=col.expr or col.name) for col in self.column_schema.columns if col.insert]
-                select.append(Field(expr="", alias="hash__", type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_fields)))
+                hash_columns = [Field(expr=col.expr or col.name) for col in self.column_schema.columns if col.hash_column]
+                select.append(Field(expr="", alias="hash__", type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_columns)))
         return select
  
 

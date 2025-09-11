@@ -1,0 +1,201 @@
+name: 'postgres_postgres'
+description: 'Pipeline sync from Postgres to Postgres with cron expressions'
+
+# global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
+# This is an optional field. If not provided, every stage will have to define its own columns.
+max_concurrent_partitions: 10
+hash_algo: 'hash_md5_hash'
+strategies:
+  # Delta sync every 15 minutes
+  - name: 'delta'
+    type: 'delta'
+    default: true
+    partition_column: 'updated_at'
+    partition_step: 7200 # 2 hours
+    sub_partition_step: 1800  # 30 minutes
+    enabled: true
+    cron: '*/15 * * * *'  # Every 15 minutes
+    page_size: 10
+    use_pagination: true
+    use_sub_partition: false
+  
+  # Hash sync every 2 hours
+  - name: 'hash'
+    type: 'hash'
+    default: true
+    enabled: true
+    partition_column: 'user_id'
+    partition_step: 500000
+    sub_partition_step: 10000
+    cron: '0 */2 * * *'  # Every 2 hours
+    page_size: 10000
+    use_pagination: false
+    use_sub_partition: true
+  
+  # Full sync daily at 3 AM
+  - name: 'full'
+    type: 'full'
+    default: true
+    enabled: true
+    partition_column: 'user_id'
+    partition_step: 500000
+    sub_partition_step: 10000
+    page_size: 10000
+    cron: '0 3 * * *'  # Daily at 3 AM
+    use_pagination: false
+    use_sub_partition: true
+
+# columns:
+#   - name: 'user_id'
+#     unique_column: true     # If true then it will be used as a unique key for the table. Default in false
+#     order_column: true      # If true then it will be used as a order key for the table. Default in false
+#     partition_column: true  # If true then it will be used as a partition key for the table. Default in false
+#     dtype: 'integer'
+#     direction: 'asc'
+#     hash_column: true     # If true then it will be included in row hash calculation. Default in true
+#     data_column: true     # If true then it will be treated as a data field and will be included whenever a row is fetched. Default in true
+#   - name: 'first_name'
+#     dtype: 'varchar'
+#     hash_column: true
+#   - name: 'last_name'
+#     dtype: 'varchar'
+#     hash_column: true
+#   - name: 'email'
+#     dtype: 'varchar'
+#     hash_column: true
+#   - name: 'created_at'
+#     dtype: 'datetime'
+#     hash_column: true
+#   - name: 'updated_at'
+#     dtype: 'datetime'
+#     hash_column: true
+#     delta_column: true      # If true then it will be used as parition key fro delta strategy. Default in false
+#   - name: 'status'
+#     dtype: 'varchar'
+#     hash_column: true
+#   - name: 'name'
+#     dtype: 'varchar'
+#     hash_column: true
+#   - name: 'checksum'
+#     dtype: 'varchar'
+#     hash_key: true
+backends:
+  - name: 'source_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'users'
+    alias: 'u'
+    schema: 'public'
+    join:
+      - table: 'user_profiles'
+        alias: 'p'
+        'on': 'u.id = p.user_id'
+        type: 'left'
+    filters: []
+    hash_columns: ['user_id', 'updated_at', 'first_name', 'last_name', 'email', 'status', 'created_at']
+    columns:
+      - name: 'user_id'
+        expr: 'u.id'
+        unique_column: true
+        order_column: true
+        direction: 'asc'
+        dtype: 'integer'
+      - name: 'updated_at'
+        expr: 'u.updated_at'
+        dtype: 'datetime'
+      - name: 'first_name'
+        expr: 'u.first_name'
+        dtype: 'varchar'
+      - name: 'last_name'
+        expr: 'u.last_name'
+        dtype: 'varchar'
+      - name: 'email'
+        expr: 'p.email'
+        dtype: 'varchar'
+      - name: 'status'
+        expr: 'u.status'
+        dtype: 'varchar'
+      - name: 'created_at'
+        expr: 'u.created_at'
+        dtype: 'datetime'
+      - name: 'updated_at'
+        expr: 'u.updated_at'
+        dtype: 'datetime'
+  - name: 'destination_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'user_profile'
+    schema: 'public_copy'
+    hash_key: checksum
+    columns:
+      - name: 'user_id'
+      - name: 'updated_at'
+        expr: 'source_updated_at'
+      - name: 'created_at'
+        expr: 'source_created_at'
+      - name: 'name'
+      - name: 'checksum'
+      - name: 'status'
+      - name: 'email'
+stages:
+  - name: 'partition_generator'
+    type: 'partition'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  - name: 'change_detection'
+    type: 'change_detection'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  - name: 'hash_fetch'
+    type: 'data_fetch'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  - name: 'hash_batcher'
+    type: 'batcher'
+    enabled: true
+    config:
+      target_batch_size: 10000
+  - name: 'transformation'
+    type: 'transform'
+    enabled: true
+    transformations:
+      - columns:
+          - first_name
+          - last_name
+        transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
+        expr: 'name'
+        dtype: 'varchar'
+  - name: 'populate'
+    type: 'populate'
+    enabled: true
+    destination:
+      name: destination_backend
+    
+    config:
+      batch_size: 10000
+      batch_timeout: 10
+      batch_timeout_unit: 'seconds'
+      batch_timeout_value: 10
+      batch_timeout_unit: 'seconds'
+  # - name: 'custom'
+  #   type: 'custom'
+  #   enabled: true
+  #   class_path: 'synctool.enrichment.enrichment_engine.EnrichmentEngine'
+  #   config:
+  #     transformations:
+  #       - columns:
+  #           - first_name
+  #           - last_name
+  #         transform: 'lambda x: x["last_name"].upper()'
+  #         dest: 'last_name'
+  #         dtype: 'varchar'
+

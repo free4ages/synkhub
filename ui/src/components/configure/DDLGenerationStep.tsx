@@ -49,8 +49,8 @@ export const DDLGenerationStep: React.FC<DDLGenerationStepProps> = ({
                 src: null, // Enrichment fields have src as null
                 dest: transform.dest,
                 dtype: transform.dtype,
-                unique_key: false,
-                order_key: false,
+                unique_column: false,
+                order_column: false,
                 hash_key: false,
                 insert: true,
                 direction: null
@@ -136,12 +136,12 @@ ${mergedColumnMap.map(col => `  - name: ${col.name}
     src: ${col.src || 'null'}
     dest: ${col.dest || 'null'}
     dtype: ${col.dtype || 'null'}
-    unique_key: ${col.unique_key}
-    order_key: ${col.order_key}
+    unique_column: ${col.unique_column}
+    order_column: ${col.order_column}
     hash_key: ${col.hash_key}
     insert: ${col.insert}
     direction: ${col.direction || 'null'}`).join('\n')}
-partition_key: ${config.partition_key || 'null'}
+partition_column: ${config.partition_column || 'null'}
 partition_step: ${config.partition_step || 'null'}`;
 
 
@@ -230,7 +230,7 @@ partition_step: ${config.partition_step || 'null'}`;
             } else if (key === 'enrichment') {
               currentSection = key;
               config[key] = { enabled: false, transformations: [] };
-            } else if (key === 'partition_key' || key === 'partition_step') {
+            } else if (key === 'partition_column' || key === 'partition_step') {
               config[key] = value === 'null' ? null : (key === 'partition_step' ? parseInt(value) : value);
             } else if (currentSection && key.includes('.')) {
               const [section, subKey] = key.split('.');

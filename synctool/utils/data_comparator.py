@@ -3,13 +3,13 @@ from synctool.core.enums import DataStatus
 from typing import Dict, List, Any
 
 
-def calculate_row_status(src_hashes: List[Dict[str, Any]], dest_hashes: List[Dict[str, Any]], unique_keys: List[str]) -> tuple[list[dict[str, Any]], list[str]]:
+def calculate_row_status(src_hashes: List[Dict[str, Any]], dest_hashes: List[Dict[str, Any]], unique_columns: List[str]) -> tuple[list[dict[str, Any]], list[str]]:
     """Calculate row status based on hashes"""
     statuses = []
     result: list[dict[str, Any]] = []
-    all_keys = {tuple(x[y] for y in unique_keys) for x in src_hashes} | {tuple(x[y] for y in unique_keys) for x in dest_hashes}
-    src_map = {tuple(x[y] for y in unique_keys): x for x in src_hashes}
-    dest_map = {tuple(x[y] for y in unique_keys): x for x in dest_hashes}
+    all_keys = {tuple(x[y] for y in unique_columns) for x in src_hashes} | {tuple(x[y] for y in unique_columns) for x in dest_hashes}
+    src_map = {tuple(x[y] for y in unique_columns): x for x in src_hashes}
+    dest_map = {tuple(x[y] for y in unique_columns): x for x in dest_hashes}
     for key in all_keys:
         src_hash: dict[str, Any] | None = src_map.get(key)
         dest_hash: dict[str, Any] | None = dest_map.get(key)

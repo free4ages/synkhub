@@ -90,7 +90,7 @@ class SchedulerCLI:
             for job_name, job_config in job_configs.items():
                 print(f"Job: {job_name}")
                 print(f"  Description: {job_config.description}")
-                print(f"  Partition Key: {job_config.partition_key}")
+                print(f"  Partition Key: {job_config.partition_column}")
                 print(f"  Strategies:")
                 
                 for strategy in job_config.strategies:
@@ -104,76 +104,7 @@ class SchedulerCLI:
             print(f"Error listing jobs: {e}")
             sys.exit(1)
     
-    async def run_job(self, args):
-        """Run a specific job manually"""
-        import pdb; pdb.set_trace()
-        config = SchedulerConfig(
-            config_dir=args.config_dir,
-            metrics_dir=args.metrics_dir
-        )
-        
-        scheduler = FileBasedScheduler(config)
-        
-        try:
-            # Load datastores first
-            # await scheduler.load_datastores()
-            await scheduler.load_configs()
-            job_config = scheduler.get_job_config(args.job_name)
-            
-            if not job_config:
-                print(f"Job '{args.job_name}' not found")
-                sys.exit(1)
-            
-            # Validate strategy if provided
-            if args.strategy:
-                strategy_names = [s.get('name') for s in job_config.strategies]
-                if args.strategy not in strategy_names:
-                    strategy_list = ', '.join(str(name) for name in strategy_names)
-                    print(f"Strategy '{args.strategy}' not found. Available strategies: {strategy_list}")
-                    sys.exit(1)
-            
-            print(f"Starting job: {args.job_name}")
-            if args.strategy:
-                print(f"Strategy: {args.strategy}")
-            
-            # Create job manager with metrics and data_storage (no locking for manual runs)
-            metrics_storage = MetricsStorage(config.metrics_dir, config.max_runs_per_job)
-            from ..monitoring.logs_storage import LogsStorage
-            logs_storage = LogsStorage(config.logs_dir, config.max_runs_per_job)
-            job_manager = SyncJobManager(
-                max_concurrent_jobs=1, 
-                metrics_storage=metrics_storage,
-                logs_storage=logs_storage,
-                data_storage=scheduler.get_data_storage()  # Pass the loaded datastores
-                # No lock_manager for manual CLI runs
-            )
-            
-            # Progress callback
-            def progress_callback(job_name: str, progress):
-                print(f"Progress: {progress.completed_partitions}/{progress.total_partitions} partitions completed")
-            
-            # Run the job without locking
-            result = await job_manager.run_sync_job(
-                config=job_config,
-                strategy_name=args.strategy,
-                progress_callback=progress_callback,
-                use_locking=False  # Disable locking for manual CLI runs
-            )
-            
-            print(f"\nJob completed!")
-            print(f"Total partitions: {result.get('total_partitions', 0)}")
-            print(f"Successful partitions: {result.get('successful_partitions', 0)}")
-            print(f"Failed partitions: {result.get('failed_partitions', 0)}")
-            print(f"Rows detected: {result.get('total_rows_detected', 0)}")
-            print(f"Rows fetched: {result.get('total_rows_fetched', 0)}")
-            print(f"Rows inserted: {result.get('total_rows_inserted', 0)}")
-            print(f"Rows updated: {result.get('total_rows_updated', 0)}")
-            print(f"Duration: {result.get('duration', 'unknown')}")
-        
-        except Exception as e:
-            traceback.print_exc()
-            print(f"Error running job: {e}")
-            sys.exit(1)
+
     
     async def show_status(self, args):
         """Show scheduler status and recent runs"""
@@ -283,14 +214,14 @@ Examples:
   # List all available jobs
   python -m synctool.cli.scheduler_cli list --config-dir ./configs
 
-  # Run a specific job manually
-  python -m synctool.cli.scheduler_cli run --job-name my_job --strategy delta
-
   # Show scheduler status
   python -m synctool.cli.scheduler_cli status --config-dir ./configs
 
   # Validate all configurations
   python -m synctool.cli.scheduler_cli validate --config-dir ./configs
+
+  # To run a specific job manually, use the sync CLI:
+  python -m synctool.cli.sync_cli run --job-name my_job --strategy delta --config-dir ./configs
         """
     )
     
@@ -314,12 +245,7 @@ Examples:
     list_parser = subparsers.add_parser('list', help='List all available jobs')
     list_parser.add_argument('--config-dir', required=True, help='Directory containing job configs')
     
-    # Run command
-    run_parser = subparsers.add_parser('run', help='Run a specific job manually')
-    run_parser.add_argument('--job-name', required=True, help='Name of the job to run')
-    run_parser.add_argument('--strategy', help='Strategy to use (optional)')
-    run_parser.add_argument('--config-dir', default='./configs', help='Directory containing job configs')
-    run_parser.add_argument('--metrics-dir', default='./data/metrics', help='Directory for metrics storage')
+
     
     # Status command
     status_parser = subparsers.add_parser('status', help='Show scheduler status')
@@ -354,8 +280,7 @@ Examples:
             asyncio.run(cli.start_scheduler(args))
         elif args.command == 'list':
             asyncio.run(cli.list_jobs(args))
-        elif args.command == 'run':
-            asyncio.run(cli.run_job(args))
+
         elif args.command == 'status':
             asyncio.run(cli.show_status(args))
         elif args.command == 'validate':

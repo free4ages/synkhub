@@ -131,17 +131,17 @@ class ClickHouseBackend(SqlBackend):
         return len(rows) > 0
 
     async def get_last_sync_point(self) -> Any:
-        if not self.column_schema or not self.column_schema.delta_key:
+        if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key in column schema")
-        column = self.column_schema.delta_key.expr
+        column = self.column_schema.delta_column.expr
         q = f"SELECT max({column}) as last_sync_point FROM {self._full_table()}"
         rows = await self.execute_query(q)
         return rows[0].get("last_sync_point")
 
     async def get_partition_bounds(self) -> Tuple[Any, Any]:
-        if not self.column_schema or not self.column_schema.partition_key:
+        if not self.column_schema or not self.column_schema.partition_column:
             raise ValueError("No partition key")
-        col = self.column_schema.partition_key.expr
+        col = self.column_schema.partition_column.expr
         q = f"SELECT min({col}) AS min_val, max({col}) AS max_val FROM {self._full_table()}"
         rows = await self.execute_query(q)
         r = rows[0] if rows else {}
@@ -273,9 +273,9 @@ class ClickHouseBackend(SqlBackend):
         return await self.execute_query(sql, action="select")
 
     async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo: HashAlgo = HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        if not self.column_schema or not self.column_schema.delta_key:
+        if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key configured")
-        partition_column = self.column_schema.delta_key.name
+        partition_column = self.column_schema.delta_column.name
         query = self._build_partition_data_query(partition, partition_column=partition_column, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
         sql, _ = self._build_sql(query)
         return await self.execute_query(sql, action="select")
@@ -290,10 +290,10 @@ class ClickHouseBackend(SqlBackend):
         return await self.execute_query(sql, action="select")
 
     async def delete_partition_data(self, partition: Partition) -> Any:
-        # Build filters for partition bounds using the column_schema.partition_key
-        if not self.column_schema or not self.column_schema.partition_key:
+        # Build filters for partition bounds using the column_schema.partition_column
+        if not self.column_schema or not self.column_schema.partition_column:
             raise ValueError("No partition key configured")
-        col = self.column_schema.partition_key.expr
+        col = self.column_schema.partition_column.expr
         where = f"{col} >= {self._format_value(partition.start)} AND {col} < {self._format_value(partition.end)}"
         sql = f"ALTER TABLE {self._full_table()} DELETE WHERE {where}"
         return await self.execute_query(sql, action="delete")
@@ -301,8 +301,8 @@ class ClickHouseBackend(SqlBackend):
     async def delete_rows(self, rows: List[Dict], partition: Partition, strategy_config: StrategyConfig) -> Any:
         if not rows:
             return 0
-        unique_keys = [col.expr for col in self.column_schema.unique_keys]
-        where = self._build_delete_where(unique_keys, rows)
+        unique_columns = [col.expr for col in self.column_schema.unique_columns]
+        where = self._build_delete_where(unique_columns, rows)
         sql = f"ALTER TABLE {self._full_table()} DELETE WHERE {where}"
         return await self.execute_query(sql, action="delete")
 
@@ -319,14 +319,14 @@ class ClickHouseBackend(SqlBackend):
 
         columns = list(data[0].keys())
         total = 0
-        unique_keys = [c.expr for c in self.column_schema.unique_keys] if self.column_schema and self.column_schema.unique_keys else None
+        unique_columns = [c.expr for c in self.column_schema.unique_columns] if self.column_schema and self.column_schema.unique_columns else None
 
         for i in range(0, len(data), batch_size):
             batch = data[i:i + batch_size]
 
             # If upsert requested and engine is MergeTree -> delete matching keys first
-            if upsert and unique_keys and self.engine == "mergetree":
-                where = self._build_delete_where(unique_keys, batch)
+            if upsert and unique_columns and self.engine == "mergetree":
+                where = self._build_delete_where(unique_columns, batch)
                 if where:
                     del_sql = f"ALTER TABLE {self._full_table()} DELETE WHERE {where}"
                     await self.execute_query(del_sql, action="delete")
@@ -359,11 +359,11 @@ class ClickHouseBackend(SqlBackend):
         partition_column_type = partition.column_type
 
         hash_column = self.column_schema.hash_key.expr if self.column_schema.hash_key else None
-        partition_column = self.column_schema.partition_key.expr
-        order_keys = self.column_schema.order_keys
-        order_column = ",".join([f"{c.expr} {d}" for c, d in order_keys]) if order_keys else None
+        partition_column = self.column_schema.partition_column.expr
+        order_columns = self.column_schema.order_columns
+        order_column = ",".join([f"{c.expr} {d}" for c, d in order_columns]) if order_columns else None
 
-        partition_hash_field = Field(
+        partition_hash_column = Field(
             expr=f"{partition_column}",
             alias="partition_hash",
             metadata=BlockHashMeta(
@@ -387,7 +387,7 @@ class ClickHouseBackend(SqlBackend):
 
         select = [
             Field(expr="count()", alias="num_rows", type="column"),
-            partition_hash_field,
+            partition_hash_column,
             partition_id_field
         ]
         grp_field = Field(expr="partition_id", type="column")

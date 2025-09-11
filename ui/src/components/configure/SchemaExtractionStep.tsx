@@ -303,12 +303,12 @@ export const SchemaExtractionStep: React.FC<SchemaExtractionStepProps> = ({
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             <div className="flex flex-wrap gap-1">
-                              {mapping.unique_key && (
+                              {mapping.unique_column && (
                                 <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                   Unique Key
                                 </span>
                               )}
-                              {mapping.order_key && (
+                              {mapping.order_column && (
                                 <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                                   Order Key
                                 </span>

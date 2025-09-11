@@ -62,7 +62,7 @@ async def run_example_sync():
             }
         },
         'column_map': [
-            {'name': 'user_id', 'src': 'u.id', 'dest': 'user_id', 'unique_key': True, 'order_key': True, 'dtype':'int', 'direction': 'asc'},
+            {'name': 'user_id', 'src': 'u.id', 'dest': 'user_id', 'unique_column': True, 'order_column': True, 'dtype':'int', 'direction': 'asc'},
             {'name':'first_name','src': 'u.first_name', 'dest': 'first_name', 'insert': False, 'dtype':'varchar'},
             {'name':'created_at','src': 'u.created_at', 'dest': 'source_created_at', 'dtype':'datetime'},
             {'name':'updated_at','src': 'u.updated_at', 'dest': 'source_updated_at', 'dtype':'datetime'},
@@ -72,7 +72,7 @@ async def run_example_sync():
             {'name':'name','src': None, 'dest': 'name'},
             {'name':'checksum','src': None, 'dest': 'checksum', 'dtype':'varchar', 'hash_key':True}
         ],
-        'partition_key': 'user_id',
+        'partition_column': 'user_id',
         'partition_step': 100000,
         'strategies': [
             {

@@ -1,112 +1,120 @@
-from typing import AsyncIterator, Dict, Any, TYPE_CHECKING, Optional
-from ..base import BatchProcessor, DataBatch
-from ...core.enums import SyncStrategy
-from ...core.models import DataStorage
+from typing import AsyncIterator, Dict, Any, TYPE_CHECKING, Optional, List
+from dataclasses import dataclass, field
+
+from ..base import PipelineStage, DataBatch, StageConfig
+from ...core.enums import SyncStrategy, DataStatus
+from ...core.models import DataStorage, BackendConfig, GlobalStageConfig, Column
+from ...core.column_mapper import ColumnSchema
+
 
 if TYPE_CHECKING:
     from ...sync.sync_engine import SyncEngine
+    from ...utils.progress_manager import ProgressManager
+
+@dataclass
+class PopulateStageConfig(StageConfig):
+    destination: BackendConfig = None
+    columns: List[Column] = field(default_factory=list)
+    enabled: bool = True
+    config: Dict[str, Any] = field(default_factory=dict)
 
 
-class PopulateStage(BatchProcessor):
+class PopulateStage(PipelineStage):
     """Stage that populates data into destination systems"""
     
-    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None):
-        super().__init__("populate", config, logger)
+    def __init__(self, sync_engine: Any, config: GlobalStageConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
+        config = PopulateStageConfig.from_global_stage_config(config)
+        super().__init__(config.name, config, logger)
         self.sync_engine = sync_engine
+        self.columns = config.columns
+        self.column_schema = ColumnSchema(config.columns)
+        self.destination_backend = sync_engine.create_backend(self.config.destination)
+        self.progress_manager = progress_manager
+    
+    async def setup(self, context: Any):
+        await self.destination_backend.connect()
+    
+    async def teardown(self, context: Any):
+        await self.destination_backend.disconnect()
+    
+    async def process(self, input_stream: AsyncIterator[DataBatch]) -> AsyncIterator[DataBatch]:
+        async for batch in input_stream:
+            yield await self.process_batch(batch)
+
     
     async def process_batch(self, batch: DataBatch) -> DataBatch:
         """Populate data to destination"""
+        # import pdb; pdb.set_trace()
         metadata = batch.batch_metadata
         change_type = metadata.get("change_type")
         partition = metadata.get("partition")
-        strategy = batch.context.strategy_config.type
+        complete_partition = metadata.get("complete_partition")
+        # strategy = metadata.get("strategy_type")
         
         try:
             rows_processed = 0
             rows_inserted = 0
             rows_updated = 0
             rows_deleted = 0
+            failed_partitions = set()
             
-            if change_type == "deleted":
+            if change_type == DataStatus.DELETED:
                 # Handle deletion
-                if partition:
-                    rows_processed = await self.sync_engine.destination_provider.delete_partition_data(partition)
-                    rows_deleted = rows_processed
-                    batch.batch_metadata["rows_deleted"] = rows_processed
-                
-            elif batch.data:
-                # Handle insertion/update based on strategy
-                if strategy == SyncStrategy.FULL:
-                    rows_processed = await self.sync_engine.destination_provider.insert_partition_data(
-                        batch.data, partition, upsert=False
-                    )
-                    rows_inserted = len(batch.data)
-                    batch.batch_metadata["rows_inserted"] = rows_inserted
-                    
-                elif strategy == SyncStrategy.DELTA:
-                    rows_processed = await self.sync_engine.destination_provider.insert_delta_data(
-                        batch.data, partition, upsert=True
-                    )
-                    rows_inserted = rows_processed
-                    batch.batch_metadata["rows_inserted"] = rows_processed
-                    
-                elif strategy == SyncStrategy.HASH:
-                    # Handle hash sync - check if we have row comparison results
-                    if metadata.get("row_comparison_done", False):
-                        # Process added, modified, and deleted rows separately
-                        added_rows = metadata.get("added_rows", [])
-                        modified_rows = metadata.get("modified_rows", [])
-                        deleted_rows = metadata.get("deleted_rows", [])
-                        
-                        if added_rows:
-                            await self.sync_engine.destination_provider.insert_partition_data(
-                                added_rows, partition, upsert=True
-                            )
-                            rows_inserted = len(added_rows)
-                        
-                        if modified_rows:
-                            await self.sync_engine.destination_provider.insert_partition_data(
-                                modified_rows, partition, upsert=True
-                            )
-                            rows_updated = len(modified_rows)
-                        
-                        if deleted_rows:
-                            # Note: This would require implementing row-level deletion in providers
-                            # For now, we'll just count them
-                            rows_deleted = len(deleted_rows)
-                        
-                        batch.batch_metadata["rows_inserted"] = rows_inserted
-                        batch.batch_metadata["rows_updated"] = rows_updated
+                if partition and complete_partition:
+                    try:
+                        await self.destination_backend.delete_partition_data(partition)
+                        rows_deleted = partition.num_rows
                         batch.batch_metadata["rows_deleted"] = rows_deleted
-                    else:
-                        # Simple hash sync without row comparison
-                        rows_processed = await self.sync_engine.destination_provider.insert_partition_data(
-                            batch.data, partition, upsert=True
-                        )
-                        
-                        # Determine if this is insert or update based on change type
-                        if change_type == "added":
-                            rows_inserted = len(batch.data)
-                            batch.batch_metadata["rows_inserted"] = rows_inserted
-                        else:  # modified
-                            rows_updated = len(batch.data)
-                            batch.batch_metadata["rows_updated"] = rows_updated
+                    except Exception as e:
+                        rows_failed = len(batch.data) or partition.num_rows
+                        batch.batch_metadata["rows_failed"] = rows_failed
+                    
+                    # Update progress with deletion count
+                    if self.progress_manager:
+                        self.progress_manager.update_progress(rows_deleted=rows_deleted)
+                else:
+                    pass
+            elif change_type == DataStatus.ADDED:
+                try:
+                    success, failed = await self.destination_backend.insert_data(batch, upsert=True)
+                    rows_inserted = success
+                    rows_failed = failed
+                    batch.batch_metadata["rows_inserted"] = rows_inserted
+                    batch.batch_metadata["rows_failed"] = rows_failed
+                except Exception as e:
+                    rows_failed = len(batch.data) or partition.num_rows
+                    batch.batch_metadata["rows_failed"] = rows_failed
+                
+                # Update progress with insertion count
+                if self.progress_manager:
+                    self.progress_manager.update_progress(rows_inserted=rows_inserted, rows_failed=rows_failed)
+                
+            elif change_type == DataStatus.MODIFIED:
+                try:
+                    success, failed = await self.destination_backend.insert_data(batch, upsert=True)
+                    rows_updated = success
+                    rows_failed = failed
+                    batch.batch_metadata["rows_failed"] = rows_failed
+                    batch.batch_metadata["rows_updated"] = rows_updated
+                except Exception as e:
+                    rows_failed = len(batch.data) or partition.num_rows
+                    batch.batch_metadata["rows_failed"] = rows_failed
+                    batch.batch_metadata["rows_updated"] = rows_updated
+                
+                # Update progress with update count
+                if self.progress_manager:
+                    self.progress_manager.update_progress(rows_updated=rows_updated, rows_failed=rows_failed)
+            if rows_failed > 0:
+                for x in batch.data:
+                    if x["failed__"]:
+                        failed_partitions.add(x["partition__"])
+                self.progress_manager.mark_failed_partitions(list(failed_partitions))
+                batch.batch_metadata["failed_partitions"] = list(failed_partitions)
             
-            batch.batch_metadata["populated"] = True
-            batch.batch_metadata["rows_processed"] = rows_processed
+
+            # batch.batch_metadata["populated"] = True
+            # batch.batch_metadata["rows_processed"] = rows_inserted + rows_updated + rows_deleted
             
-            # Update context statistics
-            if "populate_stats" not in batch.context.stage_results:
-                batch.context.stage_results["populate_stats"] = {
-                    "total_rows_inserted": 0,
-                    "total_rows_updated": 0,
-                    "total_rows_deleted": 0
-                }
-            
-            stats = batch.context.stage_results["populate_stats"]
-            stats["total_rows_inserted"] += rows_inserted
-            stats["total_rows_updated"] += rows_updated
-            stats["total_rows_deleted"] += rows_deleted
             
             self.logger.debug(f"Populated batch {batch.batch_id}: "
                             f"{rows_inserted} inserted, {rows_updated} updated, {rows_deleted} deleted")

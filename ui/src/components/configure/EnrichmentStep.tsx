@@ -43,8 +43,8 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
         src: undefined, // Enrichment columns have undefined source
         dest: 'checksum',
         dtype: 'varchar',
-        unique_key: false,
-        order_key: false,
+        unique_column: false,
+        order_column: false,
         hash_key: true, // This is the hash key
         insert: true
       };
@@ -64,8 +64,8 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
         src: undefined, // Enrichment columns have undefined source
         dest: newTransformation.dest,
         dtype: newTransformation.dtype,
-        unique_key: false,
-        order_key: false,
+        unique_column: false,
+        order_column: false,
         hash_key: false,
         insert: true
       };

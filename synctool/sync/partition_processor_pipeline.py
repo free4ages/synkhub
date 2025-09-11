@@ -31,8 +31,8 @@ class PipelinePartitionProcessor:
             self.logger.info(f"Processing partition {self.partition.partition_id} with strategy {self.strategy.value} "
                            f"from {self.partition.start} to {self.partition.end}")
             
-            if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
-                self.logger.warning("use_sub_partitions and use_pagination are both False, this will be memory intensive")
+            if not self.strategy_config.use_sub_partition and not self.strategy_config.use_pagination:
+                self.logger.warning("use_sub_partition and use_pagination are both False, this will be memory intensive")
             
             # Create pipeline context
             context = self.pipeline_builder.create_context(self.partition, self.strategy_config)

@@ -143,7 +143,7 @@ class FileBasedScheduler:
                     continue
                 
                 # Validate that referenced datastores exist
-                datastore_issues = self._validate_datastore_references(job_config)
+                datastore_issues = ConfigLoader.validate_datastore_references(job_config, self.data_storage)
                 if datastore_issues:
                     self.logger.error(f"Datastore validation failed for {config_file}: {datastore_issues}")
                     continue
@@ -154,29 +154,7 @@ class FileBasedScheduler:
             except Exception as e:
                 self.logger.error(f"Failed to load config from {config_file}: {e}")
     
-    def _validate_datastore_references(self, job_config: PipelineJobConfig) -> List[str]:
-        """Validate that all referenced datastores exist"""
-        issues = []
-        
-        if not self.data_storage:
-            issues.append("No datastores configuration loaded")
-            return issues
-        
-        # Check all stages for datastore references
-        for stage in job_config.stages:
-            # Check source backend datastore
-            if stage.source and stage.source.datastore_name:
-                datastore_name = stage.source.datastore_name
-                if not self.data_storage.get_datastore(datastore_name):
-                    issues.append(f"Stage '{stage.name}' source references unknown datastore: {datastore_name}")
-            
-            # Check destination backend datastore
-            if stage.destination and stage.destination.datastore_name:
-                datastore_name = stage.destination.datastore_name
-                if not self.data_storage.get_datastore(datastore_name):
-                    issues.append(f"Stage '{stage.name}' destination references unknown datastore: {datastore_name}")
-        
-        return issues
+
     
     async def _schedule_jobs(self):
         """Check and schedule jobs based on cron expressions"""

@@ -17,6 +17,34 @@ datastores:
       schema: 'public'
       max_connections: 10
       min_connections: 1
+  
+  local_starrocks:
+    type: 'starrocks'
+    description: 'Local StarRocks database for development and testing (HTTP)'
+    tags: ['development', 'starrocks', 'local', 'http']
+    connection:
+      host: '${STARROCK_HOST:localhost}'
+      port: ${STARROCK_PORT:9030}
+      user: '${STARROCK_USER:root}'
+      password: '${STARROCK_PASSWORD:}'
+      database: '${STARROCK_DB:synctool}'
+      schema: ''
+      max_connections: 10
+      min_connections: 1
+
+  local_starrocks_mysql:
+    type: 'starrocks_mysql'
+    description: 'Local StarRocks database for development and testing (MySQL protocol)'
+    tags: ['development', 'starrocks', 'local', 'mysql']
+    connection:
+      host: '${STARROCK_MYSQL_HOST:localhost}'
+      port: ${STARROCK_MYSQL_PORT:9030}  # StarRocks MySQL protocol port
+      user: '${STARROCK_MYSQL_USER:root}'
+      password: '${STARROCK_MYSQL_PASSWORD:}'
+      database: '${STARROCK_MYSQL_DB:synctool}'
+      schema: ''
+      max_connections: 50  # Increased for better concurrency support
+      min_connections: 5   # Increased minimum for immediate availability
 
   # Production PostgreSQL instance
   prod_postgres:

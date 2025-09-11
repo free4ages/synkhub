@@ -31,7 +31,7 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
     return config.column_map.map(col => col.name).filter(Boolean);
   };
 
-  const handleKeyConfigChange = (field: 'partition_key' | 'partition_step', value: any) => {
+  const handleKeyConfigChange = (field: 'partition_column' | 'partition_step', value: any) => {
     onConfigChange({
       ...config,
       [field]: value
@@ -112,8 +112,8 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
       src: '',
       dest: '',
       dtype: 'varchar',
-      unique_key: false,
-      order_key: false,
+      unique_column: false,
+      order_column: false,
       hash_key: false,
       insert: true
     };
@@ -314,8 +314,8 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
               <label className="flex items-center">
                 <input
                   type="checkbox"
-                  checked={mapping.unique_key}
-                  onChange={(e) => handleColumnMappingChange(index, 'unique_key', e.target.checked)}
+                  checked={mapping.unique_column}
+                  onChange={(e) => handleColumnMappingChange(index, 'unique_column', e.target.checked)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="ml-2 text-sm">Unique Key</span>
@@ -324,8 +324,8 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
               <label className="flex items-center">
                 <input
                   type="checkbox"
-                  checked={mapping.order_key}
-                  onChange={(e) => handleColumnMappingChange(index, 'order_key', e.target.checked)}
+                  checked={mapping.order_column}
+                  onChange={(e) => handleColumnMappingChange(index, 'order_column', e.target.checked)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="ml-2 text-sm">Order Key</span>
@@ -664,8 +664,8 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
               Partition Key <span className="text-red-500">*</span>
             </label>
             <select
-              value={config.partition_key || ''}
-              onChange={(e) => handleKeyConfigChange('partition_key', e.target.value)}
+              value={config.partition_column || ''}
+              onChange={(e) => handleKeyConfigChange('partition_column', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
             >

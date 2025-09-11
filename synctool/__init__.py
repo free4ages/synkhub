@@ -16,6 +16,11 @@ from .core.models import PipelineJobConfig, SyncProgress
 from .sync.sync_engine import SyncEngine
 from .sync.sync_job_manager import SyncJobManager
 from .config.config_loader import ConfigLoader
+from .config.config_manager import ConfigManager
+from .config.config_store import ConfigStore, ConfigMetadata
+from .config.file_config_store import FileConfigStore
+from .config.database_config_store import DatabaseConfigStore
+from .scheduler.config_aware_scheduler import ConfigAwareScheduler
 
 __version__ = "1.0.0"
 __all__ = [
@@ -23,7 +28,13 @@ __all__ = [
     'SyncProgress', 
     'SyncEngine',
     'SyncJobManager',
-    'ConfigLoader'
+    'ConfigLoader',
+    'ConfigManager',
+    'ConfigStore',
+    'ConfigMetadata',
+    'FileConfigStore',
+    'DatabaseConfigStore',
+    'ConfigAwareScheduler'
 ]
 
 

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, AsyncIterator, TypeVar, Generic, U
 from datetime import datetime
 import uuid
 
-from ..core.models import Partition, StrategyConfig
+from ..core.models import GlobalStageConfig, Partition, StrategyConfig, PipelineJobConfig
 
 
 # Type variables for pipeline data
@@ -16,9 +16,17 @@ U = TypeVar('U')
 @dataclass
 class StageConfig:
     """Configuration for a single pipeline stage"""
-    name: str
-    type: str
-    enabled: bool
+    name: str = ""
+    type: str = ""
+    enabled: bool = True
+
+    @classmethod
+    def from_global_stage_config(cls, global_stage_config: GlobalStageConfig) -> 'StageConfig':
+        cdict = {}
+        for field in cls.__dataclass_fields__.keys():
+            if hasattr(global_stage_config, field):
+                cdict[field] = getattr(global_stage_config, field)
+        return cls(**cdict)
 
 @dataclass
 class PipelineContext:
@@ -57,14 +65,10 @@ class StageResult:
 
 class PipelineStage(ABC, Generic[T, U]):
     """Base class for all pipeline stages"""
-    _config_class: Type[StageConfig] = StageConfig
     
-    def __init__(self, name: str, config: Union[StageConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
+    def __init__(self, name: str, config: StageConfig, logger: Optional[logging.Logger] = None):
         self.name = name
-        if isinstance(config, StageConfig):
-            self.config = config
-        else:
-            self.config = self._config_class(**config)
+        self.config = config
         self.logger = logger or logging.getLogger(f"{__name__}.{name}")
         self.enabled = self.config.enabled
         self.stage_id = str(uuid.uuid4())
@@ -163,7 +167,6 @@ class PipelineConfig:
     """Configuration for the entire pipeline"""
     name: str
     stages: List[Dict[str, Any]] = field(default_factory=list)
-    global_config: Dict[str, Any] = field(default_factory=dict)
     max_concurrent_batches: int = 10
     batch_size: int = 1000
     enable_metrics: bool = True
@@ -174,10 +177,6 @@ class PipelineConfig:
 class PipelineStats:
     """Statistics for pipeline execution"""
     pipeline_id: str
-    total_batches: int = 0
-    processed_batches: int = 0
-    failed_batches: int = 0
-    total_rows: int = 0
     stage_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -191,13 +190,9 @@ class PipelineStats:
 
 class Pipeline:
     """Main pipeline orchestrator"""
-    _config_class: Type[PipelineConfig] = PipelineConfig
     
-    def __init__(self, config: Union[PipelineConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
-        if isinstance(config, PipelineConfig):
-            self.config = config
-        else:
-            self.config = self._config_class(**config)
+    def __init__(self, config: PipelineJobConfig, logger: Optional[logging.Logger] = None):
+        self.config = config
         self.logger = logger or logging.getLogger(f"{__name__}.pipeline.{self.config.name}")
         self.stages: List[PipelineStage] = []
         self.stats = PipelineStats(pipeline_id=str(uuid.uuid4()))
@@ -217,20 +212,14 @@ class Pipeline:
                 if stage.should_process(context):
                     await stage.setup(context)
             
-            # Create initial stream from context
-            current_stream = self._create_context_stream(context)
-            
-            # Chain stages together
-            for stage in self.stages:
-                if stage.should_process(context):
-                    self.logger.info(f"Executing stage: {stage.name}")
-                    current_stream = stage.process(current_stream)
-            
-            # Consume the final stream to drive the pipeline
-            async for batch in current_stream:
-                self.stats.processed_batches += 1
-                self.stats.total_rows += batch.size
-                self.logger.debug(f"Pipeline processed batch {batch.batch_id}")
+            # Check if we should use concurrent partition processing
+            partition_stage = self._get_partition_stage()
+            if (partition_stage and 
+                hasattr(self.config, 'max_concurrent_partitions') and
+                self.config.max_concurrent_partitions > 1):
+                await self._execute_with_concurrent_partitions(context, partition_stage)
+            else:
+                await self._execute_sequential(context)
             
             self.stats.end_time = datetime.now()
             self.logger.info(f"Pipeline completed in {self.stats.duration_seconds:.2f}s")
@@ -249,6 +238,75 @@ class Pipeline:
                         self.logger.error(f"Error in stage teardown {stage.name}: {e}")
         
         return self.stats
+    
+    async def _execute_with_concurrent_partitions(self, context: Any, partition_stage):
+        """Execute with concurrent partition processing - MUCH FASTER for IO-intensive work"""
+        # Step 1: Run change detection to get all partition batches
+        initial_stream = self._create_context_stream(context)
+        partition_stream = partition_stage.process(initial_stream)
+        
+        # Collect all partition batches
+        partition_batches = []
+        async for batch in partition_stream:
+            partition_batches.append(batch) 
+        
+        # Step 2: Process each partition concurrently through remaining stages
+        max_concurrent = self.config.max_concurrent_partitions
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def process_partition_pipeline(batch: DataBatch):
+            async with semaphore:
+                try:
+                    # Process this partition through all downstream stages
+                    current_stream = self._create_single_batch_stream(batch)
+                    
+                    for stage in self.stages[1:]:  # Skip partition_stage (index 0)
+                        if stage.should_process(batch.context):
+                            current_stream = stage.process(current_stream)
+                    
+                    # Consume the stream to drive processing
+                    async for final_batch in current_stream:
+                        # self.stats.processed_batches += 1
+                        # self.stats.total_rows += final_batch.size
+                        self.logger.debug(f"Completed partition {batch.batch_metadata.get('partition_id', 'unknown')}")
+                
+                except Exception as e:
+                    self.logger.error(f"Failed processing partition {batch.batch_metadata.get('partition_id', 'unknown')}: {e}")
+                    raise
+        
+        # Step 3: Execute all partition pipelines concurrently
+        if partition_batches:
+            self.logger.info(f"Processing {len(partition_batches)} partitions concurrently (max_concurrent={max_concurrent})")
+            tasks = [process_partition_pipeline(batch) for batch in partition_batches]
+            await asyncio.gather(*tasks, return_exceptions=False)
+    
+    async def _execute_sequential(self, context: Any):
+        """Execute pipeline sequentially (original behavior)"""
+        # Create initial stream from context
+        current_stream = self._create_context_stream(context)
+        
+        # Chain stages together
+        for stage in self.stages:
+            if stage.should_process(context):
+                self.logger.info(f"Executing stage: {stage.name}")
+                current_stream = stage.process(current_stream)
+        
+        # Consume the final stream to drive the pipeline
+        async for batch in current_stream:
+            # self.stats.processed_batches += 1
+            # self.stats.total_rows += batch.size
+            self.logger.debug(f"Pipeline processed batch {batch.batch_id}")
+    
+    def _get_partition_stage(self):
+        """Get the change detection stage"""
+        for stage in self.stages:
+            if isinstance(stage.__class__.__name__, str) and 'PartitionStage' in stage.__class__.__name__:
+                return stage
+        return None
+    
+    async def _create_single_batch_stream(self, batch: DataBatch) -> AsyncIterator[DataBatch]:
+        """Create stream from a single batch"""
+        yield batch
     
     async def _create_context_stream(self, context: Any) -> AsyncIterator[Any]:
         """Create stream from single context"""

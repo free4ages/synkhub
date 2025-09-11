@@ -28,8 +28,8 @@ column_map:
   - name: 'user_id'
     src: 'u.id'
     dest: 'user_id'
-    unique_key: true
-    order_key: true
+    unique_column: true
+    order_column: true
     dtype: 'integer'
     direction: 'asc'
   - name: 'first_name'
@@ -65,7 +65,7 @@ column_map:
     dtype: 'varchar'
     hash_key: true
 
-partition_key: 'user_id'
+partition_column: 'user_id'
 partition_step: 100
 
 strategies:

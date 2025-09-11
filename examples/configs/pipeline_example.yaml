@@ -3,7 +3,7 @@
 name: "example_pipeline_sync"
 description: "Example sync job using pipeline architecture"
 partition_step: 1000
-partition_key: "id"
+partition_column: "id"
 
 source_provider:
   data_backend:
@@ -22,7 +22,7 @@ destination_provider:
 column_map:
   - source: "id"
     dest: "user_id"
-    roles: ["unique_key", "partition_key"]
+    roles: ["unique_column", "partition_column"]
     dtype: "int"
   - source: "name"
     dest: "full_name"
@@ -38,7 +38,7 @@ strategies:
   - name: "full_pipeline"
     type: "full"
     enabled: true
-    use_sub_partitions: true
+    use_sub_partition: true
     sub_partition_step: 100
     use_pagination: true
     page_size: 500

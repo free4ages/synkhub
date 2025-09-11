@@ -28,8 +28,8 @@ column_map:
   - name: 'user_id'
     src: 'u.id'
     dest: 'user_id'
-    unique_key: true
-    order_key: true
+    unique_column: true
+    order_column: true
     dtype: 'uuid'
     direction: 'asc'
   - name: 'first_name'
@@ -69,7 +69,7 @@ column_map:
     dest: 'bio'
     dtype: 'text'
 
-partition_key: 'user_id'
+partition_column: 'user_id'
 partition_step: 90000000 # will create around 50 main partitions
 
 strategies:
@@ -82,7 +82,7 @@ strategies:
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 100
     use_pagination: true
-    use_sub_partitions: false
+    use_sub_partition: false
   
   # Hash sync every 2 hours
   - name: 'hash'

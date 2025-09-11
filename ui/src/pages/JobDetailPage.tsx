@@ -160,7 +160,7 @@ export const JobDetailPage: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <label className="text-sm font-medium text-gray-700">Partition Key</label>
-                  <p className="text-sm text-gray-900 mt-1">{job.partition_key}</p>
+                  <p className="text-sm text-gray-900 mt-1">{job.partition_column}</p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Partition Step</label>
