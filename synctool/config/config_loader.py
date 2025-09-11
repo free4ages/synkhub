@@ -50,8 +50,12 @@ class ConfigLoader:
         if global_columns_map:
             global_columns_dict = ConfigLoader._process_columns(list(global_columns_map.values()))
             processed_config['columns'] = [Column(**x) for x in global_columns_dict]
+        global_max_concurrent_partitions = 1
+        if 'max_concurrent_partitions' in processed_config:
+            global_max_concurrent_partitions = processed_config['max_concurrent_partitions']
+
         if 'strategies' in processed_config:
-            global_strategies = ConfigLoader._process_strategies(processed_config['strategies'])
+            global_strategies = ConfigLoader._process_strategies(processed_config['strategies'],global_max_concurrent_partitions)
             processed_config['strategies'] = global_strategies
         else:
             processed_config['strategies'] = []
@@ -170,6 +174,7 @@ class ConfigLoader:
     def _process_stage(stage_dict: Dict[str, Any], backends_map: Dict[str, Any], global_columns: List[Dict[str, Any]], global_strategies: List[StrategyConfig]) -> GlobalStageConfig:
         """Process stage configuration into GlobalStageConfig object"""
         processed_stage = stage_dict.copy()
+        # import pdb; pdb.set_trace()
 
         # Process columns - inherit from global if not specified
         stage_columns_dict = []
@@ -186,7 +191,9 @@ class ConfigLoader:
         # Process source backend if present
         if 'source' in processed_stage and isinstance(processed_stage['source'], dict):
             if 'name' in processed_stage['source'] and processed_stage['source']['name'] in backends_map:
+                source_dict = processed_stage['source'].copy()
                 processed_stage['source'].update(backends_map[processed_stage['source']['name']])
+                processed_stage['source'].update(source_dict)
             source_config = ConfigLoader._process_backend_config(
                 processed_stage['source'], stage_columns_dict
             )
@@ -196,6 +203,9 @@ class ConfigLoader:
         if 'destination' in processed_stage and isinstance(processed_stage['destination'], dict):
             if 'name' in processed_stage['destination'] and processed_stage['destination']['name'] in backends_map:
                 processed_stage['destination'].update(backends_map[processed_stage['destination']['name']])
+                dest_dict = processed_stage['destination'].copy()
+                processed_stage['destination'].update(backends_map[processed_stage['destination']['name']])
+                processed_stage['destination'].update(dest_dict)
             dest_config = ConfigLoader._process_backend_config(
                 processed_stage['destination'], stage_columns_dict
             )
@@ -222,10 +232,12 @@ class ConfigLoader:
         return GlobalStageConfig(**processed_stage)
     
     @staticmethod
-    def _process_strategies(strategies_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _process_strategies(strategies_data: List[Dict[str, Any]], global_max_concurrent_partitions: int) -> List[Dict[str, Any]]:
         """Process strategies configurations into StrategyConfig objects"""
         strategies = []
         for strat_dict in strategies_data:
+            if not 'max_concurrent_partitions' in strat_dict:
+                strat_dict['max_concurrent_partitions'] = global_max_concurrent_partitions
             strategies.append(ConfigLoader._process_strategy(strat_dict))
         return strategies
     

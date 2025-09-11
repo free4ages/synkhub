@@ -117,7 +117,8 @@ class ChangeDetectionStage(PipelineStage):
                 async for batch in self._process_delta_partitions(data_batch, strategy_config, job_context):
                     yield batch
             elif sync_strategy == SyncStrategy.HASH:
-                async for batch in self._process_hash_partitions(data_batch, strategy_config, job_context):
+                match_row_count = strategy_config.match_row_count
+                async for batch in self._process_hash_partitions(data_batch, strategy_config, job_context, match_row_count):
                     yield batch
     
     # async def _determine_strategy(self, strategy_name: Optional[str], start: Any, end: Any) -> Tuple[SyncStrategy, Optional[StrategyConfig]]:
@@ -233,7 +234,7 @@ class ChangeDetectionStage(PipelineStage):
             self.progress_manager.update_progress(total_partitions=1)
             yield batch
     
-    async def _process_hash_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any) -> AsyncIterator[DataBatch]:
+    async def _process_hash_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any, match_row_count: bool = True) -> AsyncIterator[DataBatch]:
         """Process hash sync partitions concurrently"""
         partition = data_batch.batch_metadata.get("partition")
         partition.intervals = [strategy_config.partition_step, strategy_config.sub_partition_step]
@@ -241,7 +242,8 @@ class ChangeDetectionStage(PipelineStage):
         async for part, status in self._calculate_sub_partitions(
             partition,
             max_level=len(partition.intervals)-1,
-            page_size=strategy_config.page_size
+            page_size=strategy_config.page_size,
+            match_row_count=match_row_count
         ):         
             if status in (DataStatus.ADDED, DataStatus.MODIFIED, DataStatus.DELETED):
                 batch = DataBatch(
@@ -364,7 +366,7 @@ class ChangeDetectionStage(PipelineStage):
             return [partition]
     
     async def _calculate_sub_partitions(self, partition: Partition, max_level: int = 100, 
-                                      page_size: int = 1000) -> AsyncIterator[Tuple[Partition, str]]:
+                                      page_size: int = 1000, match_row_count: bool = True) -> AsyncIterator[Tuple[Partition, str]]:
         """Calculate sub-partitions for hash sync - yields partition/status pairs"""
         # # Create backends from stage configurations
         # change_detection_stage = self.sync_engine.stage_configs.get('change_detection')
@@ -376,6 +378,7 @@ class ChangeDetectionStage(PipelineStage):
         # import pdb; pdb.set_trace()
         source_backend = self.source_backend
         destination_backend = self.destination_backend
+        # import pdb; pdb.set_trace()
         src_rows = await source_backend.fetch_child_partition_hashes(
             partition, hash_algo=self.config.hash_algo
         )
@@ -386,7 +389,7 @@ class ChangeDetectionStage(PipelineStage):
         
         s_partitions = to_partitions(src_rows, partition)
         d_partitions = to_partitions(destination_rows, partition)
-        partitions, status_map = calculate_partition_status(s_partitions, d_partitions)
+        partitions, status_map = calculate_partition_status(s_partitions, d_partitions, skip_row_count=not match_row_count)
         
         for p in partitions:
             key = (p.start, p.end, p.level)
@@ -395,7 +398,7 @@ class ChangeDetectionStage(PipelineStage):
             if st in ('M', 'A') and (p.num_rows > page_size and p.level < max_level):
                 # Recursively yield from deeper partitions
                 async for deeper_partition, deeper_status in self._calculate_sub_partitions(
-                    p, max_level=max_level, page_size=page_size
+                    p, max_level=max_level, page_size=page_size, match_row_count=match_row_count
                 ):
                     yield deeper_partition, deeper_status
             else:

@@ -1,6 +1,6 @@
 from typing import AsyncIterator, Dict, Any, TYPE_CHECKING, Optional, List
 from dataclasses import dataclass, field
-
+import traceback
 from ..base import PipelineStage, DataBatch, StageConfig
 from ...core.enums import SyncStrategy, DataStatus
 from ...core.models import DataStorage, BackendConfig, GlobalStageConfig, Column
@@ -66,6 +66,7 @@ class PopulateStage(PipelineStage):
                         rows_deleted = partition.num_rows
                         batch.batch_metadata["rows_deleted"] = rows_deleted
                     except Exception as e:
+                        traceback.print_exc()
                         rows_failed = len(batch.data) or partition.num_rows
                         batch.batch_metadata["rows_failed"] = rows_failed
                     
@@ -82,6 +83,7 @@ class PopulateStage(PipelineStage):
                     batch.batch_metadata["rows_inserted"] = rows_inserted
                     batch.batch_metadata["rows_failed"] = rows_failed
                 except Exception as e:
+                    traceback.print_exc()
                     rows_failed = len(batch.data) or partition.num_rows
                     batch.batch_metadata["rows_failed"] = rows_failed
                 
@@ -97,6 +99,7 @@ class PopulateStage(PipelineStage):
                     batch.batch_metadata["rows_failed"] = rows_failed
                     batch.batch_metadata["rows_updated"] = rows_updated
                 except Exception as e:
+                    traceback.print_exc()
                     rows_failed = len(batch.data) or partition.num_rows
                     batch.batch_metadata["rows_failed"] = rows_failed
                     batch.batch_metadata["rows_updated"] = rows_updated
@@ -106,7 +109,7 @@ class PopulateStage(PipelineStage):
                     self.progress_manager.update_progress(rows_updated=rows_updated, rows_failed=rows_failed)
             if rows_failed > 0:
                 for x in batch.data:
-                    if x["failed__"]:
+                    if x.get("failed__"):
                         failed_partitions.add(x["partition__"])
                 self.progress_manager.mark_failed_partitions(list(failed_partitions))
                 batch.batch_metadata["failed_partitions"] = list(failed_partitions)

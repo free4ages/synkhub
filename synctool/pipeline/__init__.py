@@ -1,5 +1,5 @@
 # Pipeline package initialization
-from .base import Pipeline, PipelineConfig, PipelineContext, DataBatch, PipelineStage, BatchProcessor
+from .base import Pipeline, PipelineConfig, PipelineContext, DataBatch, PipelineStage
 from .pipeline_builder import PipelineBuilder
 
 __all__ = [
@@ -8,6 +8,5 @@ __all__ = [
     'PipelineContext',
     'DataBatch',
     'PipelineStage',
-    'BatchProcessor',
     'PipelineBuilder'
 ]

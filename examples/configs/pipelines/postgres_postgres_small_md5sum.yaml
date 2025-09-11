@@ -11,7 +11,7 @@ strategies:
     type: 'delta'
     default: true
     partition_column: 'updated_at'
-    max_concurrent_partitions: 10
+    max_concurrent_partitions: 1
     partition_step: 7200 # 2 hours
     sub_partition_step: 1800  # 30 minutes
     enabled: true
@@ -28,6 +28,7 @@ strategies:
     partition_column: 'user_id'
     partition_step: 100
     sub_partition_step: 10
+    max_concurrent_partitions: 1
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
     use_pagination: false
@@ -41,6 +42,7 @@ strategies:
     partition_column: 'user_id'
     partition_step: 100
     sub_partition_step: 10
+    max_concurrent_partitions: 2
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false

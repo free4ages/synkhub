@@ -1,5 +1,5 @@
 from typing import AsyncIterator, Dict, Any, TYPE_CHECKING, Optional
-from ..base import BatchProcessor, DataBatch
+from ..base import DataBatch, PipelineStage
 from ...core.models import DataStorage
 
 if TYPE_CHECKING:
@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from ...utils.progress_manager import ProgressManager
 
 
-class EnrichStage(BatchProcessor):
+class EnrichStage(PipelineStage):
     """Stage that enriches data using the enrichment engine"""
     
     def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
@@ -19,6 +19,11 @@ class EnrichStage(BatchProcessor):
         """Only process if enrichment engine is available"""
         return (super().should_process(context) and 
                 self.sync_engine.enrichment_engine is not None)
+    
+    async def process(self, input_stream: AsyncIterator[DataBatch]) -> AsyncIterator[DataBatch]:
+        """Process the input stream and yield output"""
+        async for batch in input_stream:
+            yield await self.process_batch(batch)
     
     async def process_batch(self, batch: DataBatch) -> DataBatch:
         """Enrich the batch data"""

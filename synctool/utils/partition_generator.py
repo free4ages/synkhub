@@ -128,7 +128,7 @@ def to_partitions(
     return partitions
 
 
-def calculate_partition_status(src_partitions: List[Partition], snk_partitions: List[Partition]) -> Tuple[List[Partition], dict[tuple[Any, Any, int], str]]:
+def calculate_partition_status(src_partitions: List[Partition], snk_partitions: List[Partition],skip_row_count=False) -> Tuple[List[Partition], dict[tuple[Any, Any, int], str]]:
     status: dict[tuple[Any, Any, int], str] = {}
     all_keys: set[tuple[Any, Any, int]] = {(c.start, c.end, c.level) for c in src_partitions} | {(c.start, c.end, c.level) for c in snk_partitions}
     src_map: dict[tuple[Any, Any, int], Partition] = {(c.start, c.end, c.level): c for c in src_partitions}
@@ -141,7 +141,7 @@ def calculate_partition_status(src_partitions: List[Partition], snk_partitions: 
         sel: Partition | None = sc or kc
         if sc and kc:
             sel = sc if sc.num_rows> kc.num_rows else kc
-        if sc and kc and sc.num_rows == kc.num_rows and sc.hash == kc.hash:
+        if sc and kc and (skip_row_count or sc.num_rows == kc.num_rows) and sc.hash == kc.hash:
             status[key] = DataStatus.UNCHANGED
         elif sc and kc:
             status[key] = DataStatus.MODIFIED

@@ -47,17 +47,14 @@ class ColumnSchema:
 
     def columns_to_fetch(self) -> List[Column]:
         """Returns list of source expressions (expr) or names if expr missing."""
-        return self.columns
-        # return [c for c in self.columns if c.data_column]
+        return [c for c in self.columns if c.data_column]
     
     def columns_to_hash(self) -> List[Column]:
-        return self.columns
-        # return [c for c in self.columns if c.hash_column]
+        return [c for c in self.columns if c.hash_column]
 
     def columns_to_insert(self) -> List[Column]:
         """Returns list of column names to be inserted (insert==True)."""
-        return self.columns
-        # return [c for c in self.columns if c.data_column]
+        return [c for c in self.columns if c.data_column]
     
     def transform_data(self, data: list[dict[str, Any]]) -> list[dict[str, Any]]:
         new_data = {}

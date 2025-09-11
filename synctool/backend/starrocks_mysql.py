@@ -10,7 +10,7 @@ import aiohttp
 from synctool.pipeline.base import DataBatch
 from synctool.core.models import StrategyConfig, BackendConfig, DataStorage
 from synctool.core.enums import HashAlgo, Capability
-from synctool.core.query_models import Query, Field, Filter, BlockHashMeta, BlockNameMeta, RowHashMeta, Table
+from synctool.core.query_models import Query, Field, Filter, BlockHashMeta, BlockNameMeta, RowHashMeta, Table, GroupHashMeta
 from synctool.utils.sql_builder import SqlBuilder
 from .base_backend import SqlBackend
 from ..core.models import Partition, Column
@@ -494,6 +494,13 @@ class StarRocksMySQLBackend(SqlBackend):
             expr = f"MD5(GROUP_CONCAT(LEFT({inner_expr},8) ORDER BY {metadata.order_column} SEPARATOR ''))"
         return expr
 
+    def _build_grouphash_expr(self, field: Field) -> str:
+        metadata: GroupHashMeta = field.metadata
+        expr=""
+        if metadata.hash_column:
+            expr = f"sum({metadata.hash_column})"
+        return expr
+
     def _rewrite_query(self, query: Query) -> Query:
         """Rewrite query to handle StarRocks-specific expressions via MySQL"""
         rewritten = []
@@ -506,6 +513,9 @@ class StarRocksMySQLBackend(SqlBackend):
                 rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
             elif f.type == "rowhash":
                 expr = self._build_rowhash_expr(f)
+                rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
+            elif f.type == "grouphash":
+                expr = self._build_grouphash_expr(f)
                 rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
             else:
                 rewritten.append(f)

@@ -10,7 +10,7 @@ import json
 import decimal
 import logging
 
-from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
+from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table, GroupHashMeta
 from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column, DataStorage
 from ..core.column_mapper import ColumnSchema  # Add this import
 from ..core.enums import HashAlgo, BackendType, Capability
@@ -220,6 +220,7 @@ class Backend(BaseBackend):
         self.joins = self.config.join if self.config.join else []
         # Fix filter parsing - config.filters should be List[Dict] not List[str]
         self.filters = self.config.filters if self.config.filters else []
+        self.group_by = self.config.group_by if self.config.group_by else []
         self.supports_update = config.supports_update
         # Removed: self.column_mapping = ColumnMapping(**config.column_mapping) if config.column_mapping else ColumnMapping()
         self.column_schema = column_schema  # New: ColumnSchema instance
@@ -360,12 +361,14 @@ class SqlBackend(Backend):
         
         # Add pagination if specified
         limit = page_size if page_size is not None else None
+        is_group = bool(self.group_by)
 
         query = Query(
-            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns,partition_id=partition.partition_id),
+            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns,partition_id=partition.partition_id, is_group=is_group),
             table= self._build_table_query(),
             joins= self._build_join_query(),
             filters= filters,
+            group_by=[Field(expr=col) for col in self.group_by],
             limit=limit,
             offset=offset,
             order_by=order_by
@@ -373,7 +376,7 @@ class SqlBackend(Backend):
         return query
     
     
-    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None, partition_id:str=None):
+    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None, partition_id:str=None, is_group=False):
         select = []
         if not self.column_schema:
             raise ValueError("No column schema configured")
@@ -391,6 +394,9 @@ class SqlBackend(Backend):
             if hash_column:
                 # hash_columns is a list of Column objects
                 select.append(Field(expr=hash_column.expr, alias='hash__'))
+            elif is_group:
+                hash_columns = [Field(expr=col.expr or col.name) for col in self.column_schema.columns if col.hash_column]
+                select.append(Field(expr="", alias="hash__", type="grouphash", metadata=GroupHashMeta(strategy=hash_algo, fields=hash_columns)))
             else:
                 # Generate hash from all columns
                 hash_columns = [Field(expr=col.expr or col.name) for col in self.column_schema.columns if col.hash_column]

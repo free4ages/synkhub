@@ -91,75 +91,75 @@ class PipelineStage(ABC, Generic[T, U]):
         return self.enabled
 
 
-class BatchProcessor(PipelineStage[DataBatch, DataBatch]):
-    """Base class for stages that process data batches"""
+# class BatchProcessor(PipelineStage[DataBatch, DataBatch]):
+#     """Base class for stages that process data batches"""
     
-    def __init__(self, name: str, config: Union[StageConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
-        super().__init__(name, config, logger)
-        # StageConfig is a dataclass, access attributes directly with defaults
-        self.max_batch_size = getattr(config, 'max_batch_size', 1000)
-        self.buffer_size = getattr(config, 'buffer_size', 10)
+#     def __init__(self, name: str, config: Union[StageConfig, Dict[str, Any]], logger: Optional[logging.Logger] = None):
+#         super().__init__(name, config, logger)
+#         # StageConfig is a dataclass, access attributes directly with defaults
+#         self.max_batch_size = getattr(config, 'max_batch_size', 1000)
+#         self.buffer_size = getattr(config, 'buffer_size', 10)
     
-    @abstractmethod
-    async def process_batch(self, batch: DataBatch) -> DataBatch:
-        """Process a single batch"""
-        pass
+#     @abstractmethod
+#     async def process_batch(self, batch: DataBatch) -> DataBatch:
+#         """Process a single batch"""
+#         pass
     
-    async def process(self, input_stream: AsyncIterator[DataBatch]) -> AsyncIterator[DataBatch]:
-        """Process batches with concurrency control"""
-        semaphore = asyncio.Semaphore(self.buffer_size)
+#     async def process(self, input_stream: AsyncIterator[DataBatch]) -> AsyncIterator[DataBatch]:
+#         """Process batches with concurrency control"""
+#         semaphore = asyncio.Semaphore(self.buffer_size)
         
-        async def process_with_semaphore(batch: DataBatch) -> DataBatch:
-            async with semaphore:
-                if not self.should_process(batch.context):
-                    return batch
+#         async def process_with_semaphore(batch: DataBatch) -> DataBatch:
+#             async with semaphore:
+#                 if not self.should_process(batch.context):
+#                     return batch
                 
-                start_time = datetime.now()
-                try:
-                    result = await self.process_batch(batch)
-                    duration = (datetime.now() - start_time).total_seconds() * 1000
+#                 start_time = datetime.now()
+#                 try:
+#                     result = await self.process_batch(batch)
+#                     duration = (datetime.now() - start_time).total_seconds() * 1000
                     
-                    # Record stage result in job context metadata
-                    stage_stats = result.context.metadata.get(f"{self.name}_stats", {})
-                    stage_stats.update({
-                        "success": True,
-                        "data_processed": batch.size,
-                        "duration_ms": duration
-                    })
-                    result.context.metadata[f"{self.name}_stats"] = stage_stats
+#                     # Record stage result in job context metadata
+#                     stage_stats = result.context.metadata.get(f"{self.name}_stats", {})
+#                     stage_stats.update({
+#                         "success": True,
+#                         "data_processed": batch.size,
+#                         "duration_ms": duration
+#                     })
+#                     result.context.metadata[f"{self.name}_stats"] = stage_stats
                     
-                    self.logger.debug(f"Processed batch {batch.batch_id} in {duration:.2f}ms")
-                    return result
+#                     self.logger.debug(f"Processed batch {batch.batch_id} in {duration:.2f}ms")
+#                     return result
                     
-                except Exception as e:
-                    duration = (datetime.now() - start_time).total_seconds() * 1000
-                    stage_stats = batch.context.metadata.get(f"{self.name}_stats", {})
-                    stage_stats.update({
-                        "success": False,
-                        "error": str(e),
-                        "duration_ms": duration
-                    })
-                    batch.context.metadata[f"{self.name}_stats"] = stage_stats
-                    self.logger.error(f"Failed to process batch {batch.batch_id}: {e}")
-                    raise
+#                 except Exception as e:
+#                     duration = (datetime.now() - start_time).total_seconds() * 1000
+#                     stage_stats = batch.context.metadata.get(f"{self.name}_stats", {})
+#                     stage_stats.update({
+#                         "success": False,
+#                         "error": str(e),
+#                         "duration_ms": duration
+#                     })
+#                     batch.context.metadata[f"{self.name}_stats"] = stage_stats
+#                     self.logger.error(f"Failed to process batch {batch.batch_id}: {e}")
+#                     raise
         
-        # Process batches with controlled concurrency
-        tasks: List[asyncio.Task[DataBatch]] = []
-        async for batch in input_stream:
-            task = asyncio.create_task(process_with_semaphore(batch))
-            tasks.append(task)
+#         # Process batches with controlled concurrency
+#         tasks: List[asyncio.Task[DataBatch]] = []
+#         async for batch in input_stream:
+#             task = asyncio.create_task(process_with_semaphore(batch))
+#             tasks.append(task)
             
-            # Limit concurrent tasks
-            if len(tasks) >= self.buffer_size:
-                completed_tasks, pending_tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for task in completed_tasks:
-                    yield await task
-                tasks = list(pending_tasks)
+#             # Limit concurrent tasks
+#             if len(tasks) >= self.buffer_size:
+#                 completed_tasks, pending_tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+#                 for task in completed_tasks:
+#                     yield await task
+#                 tasks = list(pending_tasks)
         
-        # Process remaining tasks
-        if tasks:
-            for task in asyncio.as_completed(tasks):
-                yield await task
+#         # Process remaining tasks
+#         if tasks:
+#             for task in asyncio.as_completed(tasks):
+#                 yield await task
 
 
 @dataclass
@@ -214,10 +214,13 @@ class Pipeline:
             
             # Check if we should use concurrent partition processing
             partition_stage = self._get_partition_stage()
-            if (partition_stage and 
-                hasattr(self.config, 'max_concurrent_partitions') and
-                self.config.max_concurrent_partitions > 1):
-                await self._execute_with_concurrent_partitions(context, partition_stage)
+            if partition_stage:
+                strategy, strategy_config = await partition_stage.determine_strategy_for_context(context)
+                max_concurrent_partitions = strategy_config.max_concurrent_partitions if strategy_config else 1
+                if max_concurrent_partitions > 1:
+                    await self._execute_with_concurrent_partitions(context, partition_stage, max_concurrent_partitions)
+                else:
+                    await self._execute_sequential(context)
             else:
                 await self._execute_sequential(context)
             
@@ -239,7 +242,7 @@ class Pipeline:
         
         return self.stats
     
-    async def _execute_with_concurrent_partitions(self, context: Any, partition_stage):
+    async def _execute_with_concurrent_partitions(self, context: Any, partition_stage, max_concurrent_partitions: int):
         """Execute with concurrent partition processing - MUCH FASTER for IO-intensive work"""
         # Step 1: Run change detection to get all partition batches
         initial_stream = self._create_context_stream(context)
@@ -251,7 +254,7 @@ class Pipeline:
             partition_batches.append(batch) 
         
         # Step 2: Process each partition concurrently through remaining stages
-        max_concurrent = self.config.max_concurrent_partitions
+        max_concurrent = max_concurrent_partitions
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def process_partition_pipeline(batch: DataBatch):

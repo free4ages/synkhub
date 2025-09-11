@@ -133,6 +133,7 @@ class JoinConfig:
     type: str = "inner"
     alias: Optional[str] = None
 
+
 @dataclass
 class FilterConfig:
     column: str
@@ -158,38 +159,30 @@ class StrategyConfig:
     enabled: bool = True
     default: bool = True
     partition_column: str = ""
+    match_row_count: bool = True
     partition_column_type: Optional[str] = None
     max_concurrent_partitions: int = 1
-    # if true, will create sub partitions for each partition. Only available for delta and full strategies.
+    
+    # Legacy single-dimension partitioning (kept for backward compatibility)
     use_sub_partition: bool = True   
-    # step size for sub partitions. Only available for delta and full strategies.
     sub_partition_step: int = 100 
-    # minimum step size for sub partitions. Only available for hash strategies.
-    # Main parition will be recursively divided into sub partitions until the step size is less than or equal to min_sub_partition_step or page_size is reached.
     min_sub_partition_step: int = 10  
-    # factor by which to reduce the step size for sub partitions. Only available for hash strategies.
-    # The block size will recursively reduced by this factor until it is less than or equal to min_sub_partition_step.
     interval_reduction_factor: int = 2  
-    # Optionally provide a list of intervals to use for the hash strategy.
-    # If not provided, will be automatically calculated based on the min_sub_partition_step and interval_reduction_factor.
-    # If provided, will be used to calculate the sub partitions.
-    # If provided, min_sub_partition_step and interval_reduction_factor will be ignored.
     intervals: List[int] = field(default_factory=list)
+    partition_step: Optional[int] = None
+    
+    # New multi-dimensional partitioning
+    primary_partitions: List[PartitionDimension] = field(default_factory=list)
+    secondary_partitions: List[PartitionDimension] = field(default_factory=list)
+    
     prevent_update_unless_changed: bool = True
-    # if true, will use pagination to fetch data. Only available for delta and full and hash strategies.
     use_pagination: bool = False
-    # page size for pagination. Only available for delta and full and hash strategies.
-    # If use_pagination is true, will fetch data in chunks of page_size.
-    # For delta strategy, will fetch data in chunks of page_size.
-    # Also prevents sub partitions from being created in hash strategy.
     page_size: int = 1000
-    cron: Optional[str] = None  # Cron expression for scheduling
-    # partition_column: Optional[str] = None  # Column to use for partitioning
-    partition_step: Optional[int] = None  # Step size for partitioning
+    cron: Optional[str] = None
     
     # New pipeline configuration
     pipeline_config: Optional[Dict[str, Any]] = None
-    enable_pipeline: bool = True  # Whether to use pipeline architecture
+    enable_pipeline: bool = True
 
 @dataclass
 class TransformationConfig:
@@ -303,7 +296,7 @@ class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
     dtype: Optional[UniversalDataType] = None
-    hash_column: bool = True
+    hash_column: bool = False
     data_column: bool = True
     unique_column: bool = False
     order_column: bool = False
@@ -328,6 +321,7 @@ class BackendConfig:
     alias: Optional[str] = None
     join: List[JoinConfig] = field(default_factory=list)
     filters: List[FilterConfig] = field(default_factory=list)
+    group_by: List[str] = field(default_factory=list)
     columns: List[Column] = field(default_factory=list)
     config: Optional[Dict[str, Any]] = None
     hash_cache: Optional[Dict[str, Any]] = None
@@ -431,5 +425,31 @@ class SchedulerConfig:
     metrics_dir: str = "./data/metrics"
     logs_dir: str = "./data/logs"
     max_runs_per_job: int = 50
+
+
+@dataclass
+class PartitionDimension:
+    """Single partition dimension configuration"""
+    column: str
+    step: Union[int, str]  # Can be numeric step or time period like 'daily', 'weekly'
+    column_type: Optional[str] = None
+
+@dataclass
+class MultiDimensionalPartition:
+    """Multi-dimensional partition with multiple column bounds"""
+    dimensions: Dict[str, Tuple[Any, Any]]  # column_name -> (start, end)
+    partition_id: str
+    parent_partition: Optional['MultiDimensionalPartition'] = None
+    level: int = 0
+    num_rows: int = 0
+    hash: Union[str, int, None] = None
+    
+    def get_bounds_for_column(self, column: str) -> Tuple[Any, Any]:
+        """Get start/end bounds for a specific column"""
+        return self.dimensions.get(column, (None, None))
+    
+    def has_column(self, column: str) -> bool:
+        """Check if partition has bounds for a specific column"""
+        return column in self.dimensions
 
 

@@ -18,6 +18,12 @@ class RowHashMeta:
     fields: Optional[List['Field']] = field(default_factory=list)
 
 @dataclass
+class GroupHashMeta:
+    strategy: str
+    hash_column: Optional[str] = None
+    fields: Optional[List['Field']] = field(default_factory=list)
+
+@dataclass
 class BlockNameMeta:
     level: int
     partition_column: str
@@ -38,8 +44,8 @@ class Filter:
 class Field:
     expr: str
     alias: Optional[str] = None
-    type: str = 'column'        # 'column', 'blockhash', 'blockname', 'rowhash'
-    metadata: Optional[Union[BlockHashMeta, BlockNameMeta, RowHashMeta]] = None
+    type: str = 'column'        # 'column', 'blockhash', 'blockname', 'rowhash', 'grouphash'
+    metadata: Optional[Union[BlockHashMeta, BlockNameMeta, RowHashMeta, GroupHashMeta]] = None
 
 @dataclass
 class Table:

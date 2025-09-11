@@ -8,7 +8,7 @@ from typing import Any, List, Optional, Dict, Tuple
 from ..core.models import StrategyConfig
 from ..core.models import BackendConfig, DataStorage
 from ..core.enums import HashAlgo, Capability
-from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
+from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table, GroupHashMeta
 from ..utils.sql_builder import SqlBuilder
 from ..backend.base_backend import SqlBackend
 from ..core.models import Partition, BackendConfig, Column
@@ -345,6 +345,18 @@ class PostgresBackend(SqlBackend):
             expr = f"md5(CONCAT({concat}))"
         return expr
     
+    def _build_grouphash_expr(self, field: Field) -> str:
+        metadata: GroupHashMeta = field.metadata
+        expr=""
+        if metadata.hash_column:
+            expr = f"sum({metadata.hash_column})"
+        elif metadata.strategy == HashAlgo.MD5_SUM_HASH:
+            row_expr = self._build_rowhash_expr(field)
+            expr = f"sum({row_expr})"
+        else:
+            raise ValueError(f"Unsupported hash strategy: {metadata.strategy} for aggregation") 
+        return expr
+    
     def _build_blockhash_expr(self, field: Field):
         metadata: BlockHashMeta = field.metadata
         inner_expr = self._build_rowhash_expr(field)
@@ -367,6 +379,9 @@ class PostgresBackend(SqlBackend):
                 rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
             elif f.type == "rowhash":
                 expr = self._build_rowhash_expr(f)
+                rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
+            elif f.type == "grouphash":
+                expr = self._build_grouphash_expr(f)
                 rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
             else:
                 rewritten.append(f)

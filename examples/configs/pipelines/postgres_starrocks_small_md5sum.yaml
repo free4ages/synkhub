@@ -3,7 +3,7 @@ description: 'Pipeline sync from Postgres to Postgres with cron expressions'
 
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
-max_concurrent_partitions: 1
+max_concurrent_partitions: 5
 hash_algo: 'md5_sum_hash'
 strategies:
   # Delta sync every 15 minutes
@@ -27,6 +27,7 @@ strategies:
     partition_column: 'user_id'
     partition_step: 100
     sub_partition_step: 10
+    max_concurrent_partitions: 2
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
     use_pagination: false
@@ -40,6 +41,7 @@ strategies:
     partition_column: 'user_id'
     partition_step: 100
     sub_partition_step: 10
+    max_concurrent_partitions: 2
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false

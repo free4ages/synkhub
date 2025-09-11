@@ -48,6 +48,8 @@ class PartitionStage(PipelineStage):
         self.source_backend = sync_engine.create_backend(self.config.source)
         self.destination_backend = sync_engine.create_backend(self.config.destination)
         self.progress_manager = progress_manager
+        self.detected_strategy = None
+        self.detected_strategy_config = None
         # self.source_backend = sync_engine.get_backend_class(self.config.source.get('type', 'postgres'))(self.config.source, column_schema=self.source_column_schema, logger=self.logger) # type: ignore
         # self.destination_backend = sync_engine.get_backend_class(self.config.destination.get('type', 'postgres'))(self.config.destination, column_schema=self.destination_column_schema, logger=self.logger) # type: ignore
     
@@ -59,17 +61,22 @@ class PartitionStage(PipelineStage):
         await self.source_backend.disconnect()
         await self.destination_backend.disconnect()
     
+    async def determine_strategy_for_context(self, context: Any) -> Tuple[SyncStrategy, Optional[StrategyConfig]]:
+        """Determine which sync strategy to use"""
+        self.detected_strategy, self.detected_strategy_config = await self._determine_strategy(
+            context.user_strategy_name, 
+            context.user_start, 
+            context.user_end
+        )
+        return self.detected_strategy, self.detected_strategy_config
+    
     async def process(self, input_stream: AsyncIterator) -> AsyncIterator[DataBatch]:
         """Main processing method - handles strategy detection, bounds calculation, and partition processing"""
         async for job_context in input_stream:
             self.logger.info(f"Starting change detection for job: {job_context.job_name}")
             
             # Step 1: Determine sync strategy
-            sync_strategy, strategy_config = await self._determine_strategy(
-                job_context.user_strategy_name, 
-                job_context.user_start, 
-                job_context.user_end
-            )
+            sync_strategy, strategy_config = self.detected_strategy, self.detected_strategy_config
             self.logger.info(f"Using sync strategy: {sync_strategy.value}")
             
             # Store strategy info in job context for other stages
