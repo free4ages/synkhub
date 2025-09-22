@@ -88,7 +88,7 @@ def cast_value(value: Any, target_type: UniversalDataType) -> Any:
                         continue
                 raise ValueError(f"Cannot parse timestamp string: {value}")
             elif isinstance(value, datetime):
-                return value
+                return value.replace(tzinfo=None)
             elif isinstance(value, (int, float)):
                 # Unix timestamp
                 return datetime.fromtimestamp(value)
@@ -105,7 +105,7 @@ def cast_value(value: Any, target_type: UniversalDataType) -> Any:
                         continue
                 raise ValueError(f"Cannot parse datetime string: {value}")
             elif isinstance(value, datetime):
-                return value
+                return value.replace(tzinfo=None)
             elif isinstance(value, (int, float)):
                 # Unix timestamp
                 return datetime.fromtimestamp(value)

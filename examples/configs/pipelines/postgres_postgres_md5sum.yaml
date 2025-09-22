@@ -10,40 +10,55 @@ strategies:
   - name: 'delta'
     type: 'delta'
     default: true
-    partition_column: 'updated_at'
-    partition_step: 7200 # 2 hours
-    sub_partition_step: 1800  # 30 minutes
+    primary_partitions:
+      - column: 'updated_at'
+        step: 7200 # 2 hours
+        dtype: 'datetime'
+    secondary_partitions:
+      - column: 'updated_at'
+        step: 1800 # 30 minutes
+        dtype: 'datetime'
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
     use_pagination: true
-    use_sub_partition: false
+    # use_sub_partition: false
   
   # Hash sync every 2 hours
   - name: 'hash'
     type: 'hash'
     default: true
     enabled: true
-    partition_column: 'user_id'
-    partition_step: 500000
-    sub_partition_step: 100000
+    max_concurrent_partitions: 10
+    primary_partitions:
+      - column: 'user_id'
+        step: 500000
+        dtype: 'integer'
+    secondary_partitions:
+      - column: 'user_id'
+        step: 5000
+        dtype: 'integer'
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10000
     use_pagination: false
-    use_sub_partition: true
   
   # Full sync daily at 3 AM
   - name: 'full'
     type: 'full'
     default: true
     enabled: true
-    partition_column: 'user_id'
-    partition_step: 500000
-    sub_partition_step: 100000
+    max_concurrent_partitions: 10
+    primary_partitions:
+      - column: 'user_id'
+        step: 500000
+        dtype: 'integer'
+    secondary_partitions:
+      - column: 'user_id'
+        step: 50000
+        dtype: 'integer'
     page_size: 10000
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false
-    use_sub_partition: true
 
 # columns:
 #   - name: 'user_id'
@@ -92,11 +107,10 @@ backends:
     #     'on': 'u.id = p.user_id'
     #     type: 'left'
     filters: []
-    hash_columns: ['user_id', 'updated_at', 'first_name', 'last_name', 'status', 'created_at']
+    # hash_columns: ['user_id', 'updated_at', 'first_name', 'last_name', 'status', 'created_at']
     columns:
       - name: 'user_id'
         expr: 'u.id'
-        unique_column: true
         order_column: true
         direction: 'asc'
         dtype: 'integer'
@@ -129,18 +143,23 @@ backends:
     datastore_name: 'local_postgres'
     table: 'user_profile'
     schema: 'public_copy'
-    hash_key: checksum_int
     columns:
       - name: 'user_id'
-      # - name: 'uid'
-      #   dtype: 'uuid_text_dash'
+        dtype: 'integer'
+        unique_column: true
       - name: 'updated_at'
         expr: 'source_updated_at'
+        dtype: 'datetime'
       - name: 'created_at'
         expr: 'source_created_at'
+        dtype: 'datetime'
       - name: 'name'
+        dtype: 'varchar'
       - name: 'checksum_int'
+        dtype: 'integer'
+        hash_key: true
       - name: 'status'
+        dtype: 'varchar'
       # - name: 'email'
 stages:
   - name: 'partition_generator'
@@ -168,7 +187,7 @@ stages:
     type: 'batcher'
     enabled: true
     config:
-      target_batch_size: 100000
+      target_batch_size: 50000
   - name: 'transformation'
     type: 'transform'
     enabled: true

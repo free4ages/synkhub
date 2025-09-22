@@ -10,29 +10,37 @@ strategies:
   - name: 'delta'
     type: 'delta'
     default: true
-    partition_column: 'updated_at'
+    primary_partitions:
+      - column: 'updated_at'
+        step: 7200 # 2 hours
+        dtype: 'datetime'
+    secondary_partitions:
+      - column: 'updated_at'
+        step: 1800 # 30 minutes
+        dtype: 'datetime'
     max_concurrent_partitions: 1
-    partition_step: 7200 # 2 hours
-    sub_partition_step: 1800  # 30 minutes
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
     use_pagination: true
-    use_sub_partition: false
   
   # Hash sync every 2 hours
   - name: 'hash'
     type: 'hash'
     default: true
     enabled: true
-    partition_column: 'user_id'
-    partition_step: 50
-    sub_partition_step: 5
+    primary_partitions:
+      - column: 'user_id'
+        step: 50
+        dtype: 'integer'
+    secondary_partitions:
+      - column: 'user_id'
+        step: 5
+        dtype: 'integer'
     max_concurrent_partitions: 1
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
     use_pagination: false
-    use_sub_partition: true
     match_row_count: false
   
   # Full sync daily at 3 AM
@@ -40,14 +48,18 @@ strategies:
     type: 'full'
     default: true
     enabled: true
-    partition_column: 'user_id'
-    partition_step: 50
-    sub_partition_step: 5
+    primary_partitions:
+      - column: 'user_id'
+        step: 50
+        dtype: 'integer'
+    secondary_partitions:
+      - column: 'user_id'
+        step: 5
+        dtype: 'integer'
     max_concurrent_partitions: 1
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false
-    use_sub_partition: true
 
 backends:
   - name: 'source_backend'
@@ -62,11 +74,9 @@ backends:
     #     'on': 'u.id = p.user_id'
     #     type: 'left'
     filters: []
-    hash_columns: ['user_id', 'amount', 'discount']
     columns:
       - name: 'user_id'
         dtype: 'integer'
-        unique_column: true
       - name: 'amount'
         dtype: 'decimal'
       - name: 'discount'
@@ -77,15 +87,19 @@ backends:
     datastore_name: 'local_postgres'
     table: 'orders_aggregate'
     schema: 'public_copy'
-    hash_key: checksum_int
     columns:
       - name: 'user_id'
-      - name: 'total_amount'
-        expr: 'amount'
-      - name: 'total_discount'
-        expr: 'discount'
+        dtype: 'integer'
+        unique_column: true
+      - name: 'amount'
+        dtype: 'decimal'
+      - name: 'discount'
+        dtype: 'decimal'
       - name: 'num_orders'
+        dtype: 'integer'
       - name: 'checksum_int'
+        dtype: 'integer'
+        hash_key: true
 
 stages:
   - name: 'partition_generator'
@@ -109,15 +123,11 @@ stages:
       name: source_backend
       columns:
         - name: 'user_id'
-        - name: 'amount'
-          data_column: false
-        - name: 'discount'
-          data_column: false
         - name: 'num_orders'
           expr: 'count(1)'
-        - name: 'total_amount'
+        - name: 'amount'
           expr: 'sum(amount)'
-        - name: 'total_discount'
+        - name: 'discount'
           expr: 'sum(discount)'
       group_by: ['user_id']
     destination:

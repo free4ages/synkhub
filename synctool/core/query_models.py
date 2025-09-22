@@ -1,12 +1,13 @@
 import json
 from dataclasses import dataclass, field, asdict
 from typing import List, Any, Optional, Union
+from ..core.models import PartitionDimensionConfig, MultiDimensionalPartition
 
 @dataclass
 class BlockHashMeta:
-    partition_column: str
+    # partition_column: str
     strategy: str
-    partition_column_type: str
+    # partition_column_type: str
     hash_column: Optional[str] = None
     order_column: Optional[str] = None
     fields: Optional[List['Field']] = field(default_factory=list)
@@ -25,12 +26,14 @@ class GroupHashMeta:
 
 @dataclass
 class BlockNameMeta:
-    level: int
-    partition_column: str
+    # level: int
+    # partition_column: str
     strategy: str
-    partition_column_type: str
-    intervals: Optional[List[int]]
-    parent_partition_id: Optional[str] = None
+    # partition_column_type: str
+    # intervals: Optional[List[int]]
+    partition_dimensions: Optional[List[PartitionDimensionConfig]] = None
+    parent_partition: Optional[MultiDimensionalPartition] = None
+    # parent_partition_id: Optional[str] = None
 
    
 

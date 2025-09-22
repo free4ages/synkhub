@@ -218,6 +218,7 @@ class SyncCLI:
             return job_config, data_storage
             
         except Exception as e:
+            traceback.print_exc()
             self.logger.error(f"Failed to load configuration from ConfigManager: {e}")
             return None, None
         finally:

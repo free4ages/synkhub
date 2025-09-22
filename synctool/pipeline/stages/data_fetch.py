@@ -60,6 +60,7 @@ class DataFetchStage(PipelineStage):
         try:
             if change_type in (DataStatus.ADDED, DataStatus.MODIFIED):
                 async for batch in self._fetch_partition_row_hashes(self.source_backend, batch):
+                    # import pdb; pdb.set_trace()
                     yield batch
                 # if complete_partition:
                 #     data = await self._fetch_partition_data(partition)

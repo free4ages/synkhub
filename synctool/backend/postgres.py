@@ -11,11 +11,12 @@ from ..core.enums import HashAlgo, Capability
 from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table, GroupHashMeta
 from ..utils.sql_builder import SqlBuilder
 from ..backend.base_backend import SqlBackend
-from ..core.models import Partition, BackendConfig, Column
+from ..core.models import MultiDimensionalPartition, BackendConfig, Column, PartitionDimensionConfig
 from ..core.column_mapper import ColumnSchema
 from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 from ..utils.hash_cache import HashCache
 from ..pipeline.base import DataBatch
+from ..utils.partition_generator import calculate_offset
 
 DATA_EXCEPTIONS = (
     asyncpg.exceptions.UniqueViolationError,
@@ -36,6 +37,50 @@ SYSTEM_EXCEPTIONS = (
 )
 
 MAX_PG_PARAMS = 31000
+
+
+def build_parition_id_expr(partition_column_expr: str, partition_column_type: str, parent_offset: int, step: int, step_unit: str) -> str:
+    if partition_column_type == UniversalDataType.INTEGER:
+        # move start to nearest multiple of step
+        expr = f"(({partition_column_expr} - {parent_offset}) / {step})::text"
+    elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        if step_unit == "timestamp":
+            # expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column_expr}) - {parent_offset}) / {step})::int::text"
+            expr = f"((EXTRACT(EPOCH FROM {partition_column_expr})::bigint - {parent_offset}) / {step})::text"
+        elif step_unit == "minute":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})::bigint)/60 - {parent_offset}) / {step})::text"
+        elif step_unit == "hour":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})::bigint)/3600 - {parent_offset}) / {step})::text"
+        elif step_unit == "day":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})::bigint)/86400 - {parent_offset}) / {step})::text"
+        elif step_unit == "week":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})- EXTRACT(EPOCH FROM TIMESTAMPTZ '1970-01-05 00:00:00+00'))::bigint/ 604800 - {parent_offset}) / {step})::text"
+        elif step_unit == "month":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 12+ (EXTRACT(MONTH FROM {partition_column_expr})::int - 1))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "quarter":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 4+ ((EXTRACT(MONTH FROM {partition_column_expr})::int - 1) / 3))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "year":
+            expr = f"(((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970)::bigint-{parent_offset})/{step})::text"
+        else:
+            raise ValueError(f"Unsupported step unit: {step_unit}")
+    elif partition_column_type in (UniversalDataType.DATE):
+        if step_unit == "day":
+            expr = f"((({partition_column_expr} - DATE '1970-01-01')::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "week":
+            expr = f"(((({partition_column_expr} - DATE '1970-01-05') / 7)::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "month":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 12+ (EXTRACT(MONTH FROM {partition_column_expr})::int - 1))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "quarter":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 4+ ((EXTRACT(MONTH FROM {partition_column_expr})::int - 1) / 3))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "year":
+            expr = f"(((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970)::bigint-{parent_offset})/{step})::text"
+        else:
+            raise ValueError(f"Unsupported step unit: {step_unit}")
+    elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        expr = f"FLOOR((('x' || substr({partition_column_expr}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{step})::text"
+    else:
+        raise ValueError(f"Unsupported partition column type: {partition_column_type}")
+    return expr
 
 class PostgresBackend(SqlBackend):
     """PostgreSQL implementation of Backend"""
@@ -130,7 +175,7 @@ class PostgresBackend(SqlBackend):
 
     
 
-    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionalPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         if page_size is not None or offset is not None:
             order_by = [f"{c.expr} {c.direction}" for c in self.column_schema.order_columns] if self.column_schema.order_columns else [f"{self.column_schema.partition_column.expr} asc"]
@@ -141,7 +186,7 @@ class PostgresBackend(SqlBackend):
         # print(sql, params)
         return await self.execute_query(sql, params)
     
-    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_delta_data(self, partition: Optional[MultiDimensionalPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
 
         if not self.column_schema or not self.column_schema.delta_column:
@@ -155,40 +200,40 @@ class PostgresBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None, skip_cache=False) -> List[Dict]:
-        """Fetch partition row hashes from destination along with state columns"""
-        # Use HashCache for optimized fetching
-        fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo, page_size, offset)
-        if self.hash_cache and not skip_cache:
-            return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo, page_size=page_size, offset=offset)
-        else:
-            return await fallback_fn()
+    # async def fetch_partition_row_hashes(self, partition: MultiDimensionalPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None, skip_cache=False) -> List[Dict]:
+    #     """Fetch partition row hashes from destination along with state columns"""
+    #     # Use HashCache for optimized fetching
+    #     fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo, page_size, offset)
+    #     if self.hash_cache and not skip_cache:
+    #         return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo, page_size=page_size, offset=offset)
+    #     else:
+    #         return await fallback_fn()
     
-    async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch child partition hashes"""
-        # Use HashCache for optimized fetching
-        if partition is None:
-            raise ValueError("Partition is required for hash cache operations")
+    # async def fetch_child_partition_hashes(self, partition: Optional[MultiDimensionalPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    #     """Fetch child partition hashes"""
+    #     # Use HashCache for optimized fetching
+    #     if partition is None:
+    #         raise ValueError("MultiDimensionalPartition is required for hash cache operations")
         
-        if not self.column_schema:
-            raise ValueError("Column schema is required for hash cache operations")
+    #     if not self.column_schema:
+    #         raise ValueError("Column schema is required for hash cache operations")
         
-        fallback_fn = lambda: self._fetch_child_partition_hashes_direct(partition, with_hash, hash_algo)
-        if self.hash_cache:
-            return await self.hash_cache.fetch_child_partition_hashes(
-                partition, self, fallback_fn, hash_algo
-            )
-        else:
-            return await fallback_fn()
+    #     fallback_fn = lambda: self._fetch_child_partition_hashes_direct(partition, with_hash, hash_algo)
+    #     if self.hash_cache:
+    #         return await self.hash_cache.fetch_child_partition_hashes(
+    #             partition, self, fallback_fn, hash_algo
+    #         )
+    #     else:
+    #         return await fallback_fn()
     
-    async def _fetch_child_partition_hashes_direct(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: MultiDimensionalPartition, partition_dimensions: List[PartitionDimensionConfig] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Direct database fetch for child partition hashes - used by HashCache"""
-        query: Query = self._build_partition_hash_query(partition, hash_algo)
+        query: Query = self._build_partition_hash_query(partition, hash_algo, partition_dimensions=partition_dimensions)
         query = self._rewrite_query(query)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def _fetch_partition_row_hashes_direct(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_row_hashes(self, partition: MultiDimensionalPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Direct database fetch for partition row hashes - used by HashCache"""
         return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo, page_size=page_size, offset=offset)
     
@@ -222,7 +267,7 @@ class PostgresBackend(SqlBackend):
         # In practice, this would be called with proper context from partition processor
         return []
     
-    async def delete_partition_data(self, partition: Partition) -> int:
+    async def delete_partition_data(self, partition: MultiDimensionalPartition) -> int:
         """Delete partition data from destination"""
         filters = self._build_filter_query()
         column = self.column_schema.column(partition.column)
@@ -234,7 +279,7 @@ class PostgresBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params, action='delete')
     
-    async def delete_rows(self, rows: List[Dict], partition: Partition, strategy_config: StrategyConfig) -> int:
+    async def delete_rows(self, rows: List[Dict], partition: MultiDimensionalPartition, strategy_config: StrategyConfig) -> int:
         """Delete rows from destination"""
         filters = self._build_filter_query()
         unique_columns = self.column_schema.unique_columns
@@ -250,26 +295,26 @@ class PostgresBackend(SqlBackend):
     # async def insert_partition_data(
     #     self,
     #     data: List[Dict],
-    #     partition: Optional[Partition] = None,
+    #     partition: Optional[MultiDimensionalPartition] = None,
     #     batch_size: int = 5000,
     #     upsert: bool = True
     # ) -> int:      
     #     return await self.insert_data(data, partition, batch_size, upsert=upsert)
     
-    async def fetch_partition_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_partition_hashes(self, partition: MultiDimensionalPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
         return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo)
     
     # async def insert_delta_data(
     #     self,
     #     data: List[Dict],
-    #     partition: Optional[Partition] = None,
+    #     partition: Optional[MultiDimensionalPartition] = None,
     #     batch_size: int = 5000,
     #     upsert: bool = True
     # ) -> int:
     #     return await self.insert_data(data, partition, batch_size, upsert=upsert)
     
-    async def delete_partition_data(self, partition: Optional[Partition] = None) -> int:
+    async def delete_partition_data(self, partition: Optional[MultiDimensionalPartition] = None) -> int:
         """Delete partition data from destination"""
         filters = self._build_filter_query()
         filters += [
@@ -282,54 +327,73 @@ class PostgresBackend(SqlBackend):
 
     def _build_group_name_expr(self, field: Field) -> str:
         metadata: BlockNameMeta = field.metadata
-        level = metadata.level # level is the current level for which we are building the group name
-        intervals = metadata.intervals
-        partition_column = metadata.partition_column
-        partition_column_type = metadata.partition_column_type
-        parent_partition_id = metadata.parent_partition_id
-        ids = [int(i) for i in parent_partition_id.split('-')] if parent_partition_id else []
-        parent_offset = sum([intervals[i]*ids[i] for i in range(len(ids))]) if len(ids) > 0 else 0
+        parent_partition = metadata.parent_partition
+        partition_dimensions = metadata.partition_dimensions
+        parent_partition_id = parent_partition.partition_id
+        sync_bounds = parent_partition.get_sync_bounds()
+        sync_bounds_dict = {bound["column"]: bound for bound in sync_bounds}
+        id_parts = [f"'{parent_partition_id}'"] if parent_partition_id else []
+        for dimension in partition_dimensions:
+            start = sync_bounds_dict[dimension.column]["start"]
+            step = dimension.step
+            step_unit = dimension.step_unit
+            partition_column = self.column_schema.column(dimension.column)
+            partition_column_type = dimension.dtype or partition_column.dtype
+            partition_column_expr = partition_column.expr
+            parent_offset,_ = calculate_offset(start, step_unit, partition_column_type)
+            expr = build_parition_id_expr(partition_column_expr, partition_column_type, parent_offset, step, step_unit)
+            id_parts.append(expr)
+        expr = f" || '-' || ".join(id_parts)
+        return expr
 
-        if partition_column_type == UniversalDataType.INTEGER:
-            # For integer partition columns, we divide by the interval
-            # segments = []
-            # for idx in range(level+1):
-            #     fct = intervals[idx]
-            #     if idx == 0:
-            #         expr = f"FLOOR({partition_column} / {intervals[idx]})"
-            #     else:
-            #         prev = intervals[idx-1]
-            #         expr = f"FLOOR(mod({partition_column}, {prev}) / {intervals[idx]})"
-            #     segments.append(f"{expr}::text")
-            # return " || '-' || ".join(segments)
-            expr = f"FLOOR(({partition_column} - {parent_offset}) / {intervals[level]})::text"
-            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+        # level = metadata.level # level is the current level for which we are building the group name
+        # intervals = metadata.intervals
+        # partition_column = metadata.partition_column
+        # partition_column_type = metadata.partition_column_type
+        # parent_partition_id = metadata.parent_partition_id
+        # ids = [int(i) for i in parent_partition_id.split('-')] if parent_partition_id else []
+        # parent_offset = sum([intervals[i]*ids[i] for i in range(len(ids))]) if len(ids) > 0 else 0
 
-        elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
-            # segments = []
-            # for idx in range(level+1):
-            #     fct = intervals[idx]
-            #     if idx == 0:
-            #         expr = f"FLOOR(EXTRACT(EPOCH FROM {partition_column}) / {fct})"
-            #     else:
-            #         prev = intervals[idx-1]
-            #         expr = f"FLOOR(mod(EXTRACT(EPOCH FROM {partition_column}) ,{prev}) / {fct})"
+        # if partition_column_type == UniversalDataType.INTEGER:
+        #     # For integer partition columns, we divide by the interval
+        #     # segments = []
+        #     # for idx in range(level+1):
+        #     #     fct = intervals[idx]
+        #     #     if idx == 0:
+        #     #         expr = f"FLOOR({partition_column} / {intervals[idx]})"
+        #     #     else:
+        #     #         prev = intervals[idx-1]
+        #     #         expr = f"FLOOR(mod({partition_column}, {prev}) / {intervals[idx]})"
+        #     #     segments.append(f"{expr}::text")
+        #     # return " || '-' || ".join(segments)
+        #     expr = f"FLOOR(({partition_column} - {parent_offset}) / {intervals[level]})::text"
+        #     return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
-            #     segments.append(f"{expr}::text")
-            # return " || '-' || ".join(segments)
-            expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column}) - {parent_offset}) / {intervals[level]})::text"
-            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+        # elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        #     # segments = []
+        #     # for idx in range(level+1):
+        #     #     fct = intervals[idx]
+        #     #     if idx == 0:
+        #     #         expr = f"FLOOR(EXTRACT(EPOCH FROM {partition_column}) / {fct})"
+        #     #     else:
+        #     #         prev = intervals[idx-1]
+        #     #         expr = f"FLOOR(mod(EXTRACT(EPOCH FROM {partition_column}) ,{prev}) / {fct})"
 
-        elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
-            # get current number from parent partition id
+        #     #     segments.append(f"{expr}::text")
+        #     # return " || '-' || ".join(segments)
+        #     expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column}) - {parent_offset}) / {intervals[level]})::text"
+        #     return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
-            expr = f"FLOOR((('x' || substr({partition_column}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{intervals[level]})::text"
-            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+        # elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        #     # get current number from parent partition id
+
+        #     expr = f"FLOOR((('x' || substr({partition_column}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{intervals[level]})::text"
+        #     return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
 
 
-        else:
-            raise ValueError(f"Unsupported partition type: {partition_column}")
+        # else:
+        #     raise ValueError(f"Unsupported partition type: {partition_column}")
 
     def _build_rowhash_expr(self, field: Field) -> str:
         """Build row hash expression for PostgreSQL"""
@@ -393,39 +457,43 @@ class PostgresBackend(SqlBackend):
         q = self._rewrite_query(query)
         return SqlBuilder.build(q, dialect='asyncpg')
 
-    def _build_partition_hash_query(self, partition: Partition, hash_algo: HashAlgo) -> Query:
+    def _build_partition_hash_query(self, partition: MultiDimensionalPartition, hash_algo: HashAlgo, partition_dimensions: List[PartitionDimensionConfig] = None) -> Query:
         """Build partition hash query for PostgreSQL"""
-        start = partition.start
-        end = partition.end
-        partition_column: Column = self.column_schema.column(partition.column)
-        partition_column_type: UniversalDataType | None = partition_column.dtype
+        # start = partition.start
+        # end = partition.end
+        # partition_column: Column = self.column_schema.column(partition.column)
+        # partition_column_type: UniversalDataType | None = partition_column.dtype
 
-        hash_column: Column | None = self.column_schema.hash_key
+        hash_column: Column | None = self.db_column_schema.hash_key
         # partition_column = self.column_schema.partition_column
-        order_columns: list[tuple[Column, str]] | None = self.column_schema.order_columns
+        order_columns: list[tuple[Column, str]] | None = self.db_column_schema.order_columns
         order_column_expr = ",".join([f"{c.expr} {c.direction}" for c in order_columns]) if order_columns else None
         
         partition_hash_column = Field(
-            expr=f"{partition_column.expr}",
+            expr="",
+            #expr=f"{partition_column.expr}",
             alias="partition_hash",
             metadata=BlockHashMeta(
                 order_column=order_column_expr,
-                partition_column = partition_column.expr,
+                # partition_column = partition_column.expr,
                 hash_column = hash_column.expr if hash_column else None,
                 strategy = hash_algo,
-                fields = [Field(expr=x.expr) for x in self.column_schema.columns_to_fetch()],
-                partition_column_type=partition_column_type
+                fields = [Field(expr=x.expr) for x in self.db_column_schema.columns_to_hash()],
+                # partition_column_type=partition_column_type
             ),
             type="blockhash"
         )
 
         partition_id_field = Field(expr=f"partition_id", alias="partition_id", metadata=BlockNameMeta(
-            level=partition.level + 1,
-            intervals=partition.intervals,
-            partition_column_type=partition_column_type,
             strategy=hash_algo,
-            partition_column=partition_column.expr,
-            parent_partition_id=partition.partition_id
+            partition_dimensions=partition_dimensions,
+            parent_partition=partition
+            # level=partition.level + 1,
+            # intervals=partition.intervals,
+            # partition_column_type=partition_column_type,
+            # strategy=hash_algo,
+            # partition_column=partition_column.expr,
+            # parent_partition_id=partition.partition_id
         ), type="blockname")
 
         select = [
@@ -435,29 +503,36 @@ class PostgresBackend(SqlBackend):
         ]
         grp_field = Field(expr="partition_id", type="column")
 
+        sync_bounds = partition.get_sync_bounds()
         filters = []
-        if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        for bound in sync_bounds:
+            column = self.db_column_schema.column(bound["column"])
             filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
+                Filter(column=column.expr, operator='>=', value=column.cast(bound["start"])), 
+                Filter(column=column.expr, operator='<', value=column.cast(bound["end"]))
             ]
-        elif partition_column_type == UniversalDataType.INTEGER:
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
-            ]
-        elif partition_column_type == UniversalDataType.VARCHAR:
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
-            ]
-        elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
-            ]
-        else:
-            raise ValueError(f"Unsupported partition type: {partition_column_type}")
+        # if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
+        #     ]
+        # elif partition_column_type == UniversalDataType.INTEGER:
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
+        #     ]
+        # elif partition_column_type == UniversalDataType.VARCHAR:
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
+        #     ]
+        # elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
+        #     ]
+        # else:
+        #     raise ValueError(f"Unsupported partition type: {partition_column_type}")
         filters += self._build_filter_query()
         query = Query(
             select=select,
@@ -475,7 +550,7 @@ class PostgresBackend(SqlBackend):
     # async def insert_data(
     #     self,
     #     data: List[Dict],
-    #     partition: Optional[Partition] = None,
+    #     partition: Optional[MultiDimensionalPartition] = None,
     #     batch_size: int = 5000,
     #     upsert: bool = True
     # ) -> int:
@@ -484,7 +559,7 @@ class PostgresBackend(SqlBackend):
     #     if not data:
     #         return 0
 
-    #     column_keys = [col.expr for col in self.column_schema.columns_to_insert()]
+    #     column_keys = [col.expr for col in self.column_schema.insert()]
 
     #     total_upserted = 0
     #     unique_columns = [col.expr for col in self.column_schema.unique_columns]

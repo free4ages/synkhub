@@ -96,6 +96,7 @@ class BatcherStage(PipelineStage[DataBatch, DataBatch]):
         for change_type, batch_info in change_type_batches.items():
             if batch_info["data"] and current_context:
                 batch_info["batch_count"] += 1
+                # import pdb; pdb.set_trace()
                 yield DataBatch(
                     data=batch_info["data"],
                     context=current_context,

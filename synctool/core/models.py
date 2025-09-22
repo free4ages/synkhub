@@ -8,6 +8,7 @@ from .enums import HashAlgo, SyncStrategy, PartitionType, BackendType, Capabilit
 from .schema_models import UniversalDataType
 from ..utils.schema_utils import cast_value
 
+
 @dataclass
 class ConnectionConfig:
     """Base connection configuration"""
@@ -150,6 +151,15 @@ class FilterConfig:
 #     delta_column: Optional[str] = None
 #     order_column: Optional[str] = None
 
+@dataclass
+class PartitionDimensionConfig:
+    """Single partition dimension configuration"""
+    column: str
+    step: int  # Can be numeric step or time period like 'daily', 'weekly'
+    step_unit: str = ""
+    dtype: str = ""
+    start: Any = None
+    end: Any = None
 
 @dataclass
 class StrategyConfig:
@@ -158,22 +168,22 @@ class StrategyConfig:
     type: SyncStrategy
     enabled: bool = True
     default: bool = True
-    partition_column: str = ""
+    # partition_column: str = ""
     match_row_count: bool = True
-    partition_column_type: Optional[str] = None
+    # partition_column_type: Optional[str] = None
     max_concurrent_partitions: int = 1
     
     # Legacy single-dimension partitioning (kept for backward compatibility)
-    use_sub_partition: bool = True   
-    sub_partition_step: int = 100 
-    min_sub_partition_step: int = 10  
-    interval_reduction_factor: int = 2  
-    intervals: List[int] = field(default_factory=list)
-    partition_step: Optional[int] = None
+    # use_sub_partition: bool = True   
+    # sub_partition_step: int = 100 
+    # min_sub_partition_step: int = 10  
+    # interval_reduction_factor: int = 2  
+    # intervals: List[int] = field(default_factory=list)
+    # partition_step: Optional[int] = None
     
     # New multi-dimensional partitioning
-    primary_partitions: List[PartitionDimension] = field(default_factory=list)
-    secondary_partitions: List[PartitionDimension] = field(default_factory=list)
+    primary_partitions: List[PartitionDimensionConfig] = field(default_factory=list)
+    secondary_partitions: List[PartitionDimensionConfig] = field(default_factory=list)
     
     prevent_update_unless_changed: bool = True
     use_pagination: bool = False
@@ -221,21 +231,7 @@ class EnrichmentConfig:
     transformations: List[TransformationConfig] = field(default_factory=list)
 
 
-@dataclass
-class Partition:
-    """Partition bounds for sync operations"""
-    start: Any
-    end: Any
-    # step_size: int = 0
-    column: str
-    column_type: str
-    partition_step: int = 0
-    partition_id: str = field(default_factory=lambda: str(threading.current_thread().ident))
-    parent_partition: Optional['Partition'] = None
-    level: int = 0
-    num_rows: int = 0
-    hash: Union[str,int, None] = None
-    intervals: List[int] = field(default_factory=list)
+
 
 
 @dataclass
@@ -296,14 +292,15 @@ class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
     dtype: Optional[UniversalDataType] = None
-    hash_column: bool = False
-    data_column: bool = True
+    hash_column: bool = True
+    # data_column: bool = True
     unique_column: bool = False
     order_column: bool = False
     direction: str = "asc"
-    delta_column: bool = False
-    partition_column: bool = False
+    # delta_column: bool = False
+    # partition_column: bool = False
     hash_key: bool = False
+    virtual: bool = False
     
     def cast(self, value: Any) -> Any:
         if not self.dtype:
@@ -323,6 +320,7 @@ class BackendConfig:
     filters: List[FilterConfig] = field(default_factory=list)
     group_by: List[str] = field(default_factory=list)
     columns: List[Column] = field(default_factory=list)
+    db_columns: List[Column] = field(default_factory=list)
     config: Optional[Dict[str, Any]] = None
     hash_cache: Optional[Dict[str, Any]] = None
     index_cache: Optional[Dict[str, Any]] = None
@@ -428,28 +426,78 @@ class SchedulerConfig:
 
 
 @dataclass
-class PartitionDimension:
-    """Single partition dimension configuration"""
+class DimensionPartition:
+    """Partition bounds for sync operations"""
+    start: Any
+    end: Any
     column: str
-    step: Union[int, str]  # Can be numeric step or time period like 'daily', 'weekly'
-    column_type: Optional[str] = None
+    column_type: str
+    step: int = 0
+    step_unit: str = ""
+    offset: int = 0
+    partition_id: str = "0"
+    level: int = 0
+
+@dataclass
+class Partition:
+    """Partition bounds for sync operations"""
+    start: Any
+    end: Any
+    column: str
+    column_type: str
+    step: int = 0
+    offset: int = 0
+    partition_id: str = "0"
+    level: int = 0
+
+
 
 @dataclass
 class MultiDimensionalPartition:
     """Multi-dimensional partition with multiple column bounds"""
-    dimensions: Dict[str, Tuple[Any, Any]]  # column_name -> (start, end)
-    partition_id: str
+    dimensions: List[DimensionPartition]
     parent_partition: Optional['MultiDimensionalPartition'] = None
     level: int = 0
     num_rows: int = 0
     hash: Union[str, int, None] = None
+
+    @property
+    def partition_id(self) -> Optional[str]:
+        id_parts = []
+        if self.parent_partition:
+            for dimension in self.parent_partition.dimensions:
+                id_parts.append(dimension.partition_id or "0")
+        for dimension in self.dimensions:
+            id_parts.append(dimension.partition_id or "0")
+        return '-'.join(id_parts) if id_parts else None
     
     def get_bounds_for_column(self, column: str) -> Tuple[Any, Any]:
         """Get start/end bounds for a specific column"""
-        return self.dimensions.get(column, (None, None))
+        for dimension in self.dimensions:
+            if dimension.column == column:
+                return dimension.start, dimension.end
+        return None, None
     
     def has_column(self, column: str) -> bool:
         """Check if partition has bounds for a specific column"""
-        return column in self.dimensions
+        for dimension in self.dimensions:
+            if dimension.column == column:
+                return True
+        return False
+    
+    def get_sync_bounds(self) -> List[Tuple[Any, Any]]:
+        sync_bounds = []
+        handled_columns = set()
+        for dimension in self.dimensions:
+            sync_bounds.append({"column":dimension.column, "start":dimension.start, "end":dimension.end})
+            handled_columns.add(dimension.column)
+        if self.parent_partition:
+            for dimension in self.parent_partition.dimensions:
+                if dimension.column not in handled_columns:
+                    sync_bounds.append({"column":dimension.column, "start":dimension.start, "end":dimension.end})
+                    handled_columns.add(dimension.column)
+        return sync_bounds
+    
+
 
 

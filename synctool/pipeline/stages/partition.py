@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from typing import AsyncIterator, Dict, Any, List, Tuple, Optional, TYPE_CHECKING, Union, cast
+from typing import AsyncIterator, Dict, Any, List, Tuple, Optional, TYPE_CHECKING, Union, cast, Generator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -8,12 +8,15 @@ from synctool.core.column_mapper import ColumnSchema
 from synctool.core.models import Column
 
 from ..base import PipelineStage, DataBatch, StageConfig
-from ...core.models import GlobalStageConfig, Partition, StrategyConfig, DataStorage, BackendConfig
+from ...core.models import GlobalStageConfig, Partition, StrategyConfig, DataStorage, BackendConfig, PartitionDimensionConfig
 from ...core.enums import DataStatus, SyncStrategy, HashAlgo
 from ...core.schema_models import UniversalDataType
 from ...utils.partition_generator import (
     PartitionConfig, PartitionGenerator, build_intervals, 
     merge_adjacent, calculate_partition_status, to_partitions, add_exclusive_range
+)
+from ...utils.multi_dimensional_partition_generator import (
+    MultiDimensionalPartitionGenerator,
 )
 
 
@@ -82,32 +85,41 @@ class PartitionStage(PipelineStage):
             # Store strategy info in job context for other stages
             job_context.metadata["used_strategy"] = sync_strategy
             job_context.metadata["strategy_config"] = strategy_config
+
+            sync_bounds = await self._get_sync_bounds(sync_strategy, strategy_config.primary_partitions)
             
             # Step 2: Get sync bounds
-            sync_start, sync_end = await self._get_sync_bounds(
-                sync_strategy, 
-                strategy_config, 
-                job_context.user_start, 
-                job_context.user_end
-            )
-            
-            if sync_start == sync_end:
-                self.logger.info(f"Sync bounds are the same, no partitions to process")
-                job_context.metadata["change_detection_stats"] = {
-                    "total_partitions_processed": 0
-                }
-                return
-            
-            sync_end = add_exclusive_range(sync_end)
-            self.logger.info(f"Sync bounds: {sync_start} to {sync_end}")
+            # sync_bounds = await self._get_sync_bounds(
+            #     sync_strategy, 
+            #     strategy_config, 
+            #     job_context.user_start, 
+            #     job_context.user_end
+            # )
+            for sync_bound in sync_bounds:
+                if sync_bound["start"] == sync_bound["end"]:
+                    self.logger.info(f"Sync bounds are the same, no partitions to process")
+                    job_context.metadata["change_detection_stats"] = {
+                        "total_partitions_processed": 0
+                    }
+                    return
+            for sync_bound in sync_bounds:
+                # if column_type is date datetime or timestamp or integer then add exclusive range
+                if sync_bound["column_type"] in (UniversalDataType.DATE, UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP, UniversalDataType.INTEGER):
+                    sync_bound["end"] = add_exclusive_range(sync_bound["end"])
+               
+            for sync_bound in sync_bounds:
+                self.logger.info(f"Sync bounds: {sync_bound['column']} - {sync_bound['start']} to {sync_bound['end']}")
             # import pdb; pdb.set_trace()
             # Step 3: Generate all partitions for the job
             if strategy_config is None:
                 raise ValueError("Strategy config is required for partition generation")
-            partitions = await self._generate_job_partitions(strategy_config, sync_start, sync_end)
-            self.progress_manager.update_progress(total_primary_partitions=len(partitions))
+            # Generate partitions using generator
+            partitions_generator = self._generate_job_partitions(strategy_config.primary_partitions, sync_bounds)
+            partition_count = 0
 
-            for partition in partitions:
+            for partition in partitions_generator:
+                self.progress_manager.update_progress(total_primary_partitions=1)
+                partition_count += 1
                 batch = DataBatch(
                     data=[],  # Will be populated by Other stages
                     context=job_context,
@@ -117,6 +129,7 @@ class PartitionStage(PipelineStage):
                     }
                 )
                 yield batch
+
 
             # self.logger.info(f"Generated {len(partitions)} partitions for processing")
             
@@ -135,6 +148,43 @@ class PartitionStage(PipelineStage):
             # elif sync_strategy == SyncStrategy.HASH:
             #     async for batch in self._process_hash_partitions_concurrent(job_context, partitions, strategy_config):
             #         yield batch
+    
+
+    async def _get_sync_bounds(self, sync_strategy: SyncStrategy, dimension_configs: List[PartitionDimensionConfig]):
+        sync_bounds = []
+        for dimension_config in dimension_configs:
+            start, end = dimension_config.start, dimension_config.end
+            column = dimension_config.column
+            column_type = dimension_config.dtype or self.source_backend.db_column_schema.column(column).dtype
+            dimension_config.dtype = column_type
+            if column_type not in (UniversalDataType.DATE, UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP, UniversalDataType.INTEGER):
+                continue
+            if sync_strategy == SyncStrategy.DELTA:
+                if start:
+                    start = await self.destination_backend.get_last_sync_point(column)
+                if end:
+                    end = await self.source_backend.get_max_sync_point(column)
+            elif sync_strategy == SyncStrategy.FULL:
+                if not (start and end):
+                    start, end = await self.source_backend.get_partition_bounds(column)
+                elif not dimension_config.end:
+                    end = await self.source_backend.get_max_sync_point(column)
+                elif not start:
+                    start,_ = await self.source_backend.get_partition_bounds(column)
+            else:
+                if not (start and end):
+                    source_start, source_end = await self.source_backend.get_partition_bounds(column)
+                    dest_start, dest_end = await self.destination_backend.get_partition_bounds(column)
+                    start = min(source_start, dest_start)
+                    end = max(source_end, dest_end)
+                elif not end:
+                    end = await self.source_backend.get_max_sync_point(column)
+                elif not start:
+                    source_start, source_end = await self.source_backend.get_partition_bounds(column)
+                    dest_start, dest_end = await self.destination_backend.get_partition_bounds(column)
+                    start = min(source_start, dest_start)
+            sync_bounds.append({"column":column, "start":start, "end":end, "column_type":column_type})
+        return sync_bounds
     
     async def _determine_strategy(self, strategy_name: Optional[str], start: Any, end: Any) -> Tuple[SyncStrategy, Optional[StrategyConfig]]:
         """Determine which sync strategy to use"""
@@ -174,47 +224,170 @@ class PartitionStage(PipelineStage):
             delta_strategy = next((s for s in self.strategies if s.name == "delta"), None)
             return SyncStrategy.DELTA, delta_strategy
     
-    async def _get_sync_bounds(self, strategy: SyncStrategy, strategy_config: StrategyConfig, 
-                              start: Any, end: Any) -> Tuple[Any, Any]:
-        """Get start and end bounds for sync"""
-        if start and end:
-            return start, end
-        partition_column = strategy_config.partition_column
+    # async def _get_sync_bounds(self, strategy: SyncStrategy, strategy_config: StrategyConfig, 
+    #                           start: Any, end: Any) -> List[Dict[str, Any]]:
+    #     """Get start and end bounds for sync"""
+    #     sync_bounds = []
+    #     if start and end:
+    #         # if strategy is delta, we need to return the bounds for the primary partition
+    #         if strategy == SyncStrategy.DELTA and strategy_config:
+    #             primary_partition = strategy_config.primary_partitions[0]
+    #             partition_column = primary_partition.column
+    #             return [{"column":partition_column, "start":start, "end":end, "column_type":self.column_schema.column(partition_column).dtype}]
+    #         else:
+    #             # if start and end is string convert to list then assert length are equal and assign to primary partitions
+    #             # in same sequence. Also need to handle none values
+    #             if isinstance(start, list) and isinstance(end, list):
+    #                 assert len(start) == len(end)
+    #             else:
+    #                 start, end = [start], [end]
+    #             for i, partition_config in enumerate(strategy_config.primary_partitions):
+    #                 partition_column = self.column_schema.column(partition_config.column)
+    #                 partition_column_type = partition_column.dtype
+    #                 if partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+    #                     start, end = self.get_synn_bounds_for_uuid(partition_column_type)
+    #                     sync_bounds.append({"column":partition_config.column, "start":start, "end":end, "column_type":partition_column_type})
+    #                 elif start[i] is not None and end[i] is not None:
+    #                     sync_bounds.append({"column":partition_config.column, "start":start[i], "end":end[i]})
+    #                 else:
+    #                     # get bounds from source and destination depending on strategy
+    #                     if strategy == SyncStrategy.FULL:
+    #                         start, end = await self.source_backend.get_partition_bounds(partition_config.column)
+    #                         sync_bounds.append({"column":partition_config.column, "start":start, "end":end, "column_type":partition_column_type})
+    #                     else:
+    #                         dest_start, dest_end = await self.destination_backend.get_partition_bounds(partition_config.column)
+    #                         start = min(start[i], dest_start)
+    #                         end = max(end[i], dest_end)
+    #                         sync_bounds.append({"column":partition_config.column, "start":start, "end":end, "column_type":partition_column_type})
+    #             return sync_bounds
+ 
+    #     if strategy == SyncStrategy.DELTA and strategy_config:
+    #         primary_partition = strategy_config.primary_partitions[0]
+    #         partition_column = primary_partition.column
+    #         dest_start = await self.destination_backend.get_last_sync_point(partition_column)
+    #         source_end = await self.source_backend.get_max_sync_point(partition_column)
+    #         return [{"column":partition_column, "start":dest_start, "end":source_end, "column_type":self.column_schema.column(partition_column).dtype}]
         
-        
-        if strategy == SyncStrategy.DELTA and strategy_config:
-            dest_start = await self.destination_backend.get_last_sync_point(partition_column)
-            source_end = await self.source_backend.get_max_sync_point(partition_column)
-            return dest_start, source_end
-        
-        partition_column_type = self.column_schema.column(strategy_config.partition_column).dtype
-        if strategy_config and partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
-            start = "00000000000000000000000000000000"
-            end = "ffffffffffffffffffffffffffffffff"
-            if partition_column_type == UniversalDataType.UUID_TEXT_DASH:
-                return str(uuid.UUID(start)), str(uuid.UUID(end))
-            elif partition_column_type == UniversalDataType.UUID_TEXT:
-                return start, end
-            return uuid.UUID(start), uuid.UUID(end)
+    #     primary_partitions = strategy_config.primary_partitions
+    #     for i, partition_config in enumerate(primary_partitions):
+    #         partition_column = partition_config.column
 
-
-        return await self.source_backend.get_partition_bounds(partition_column)
+    #         partition_column_type = self.column_schema.column(partition_column).dtype
+    #         if partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+    #             start, end = self.get_sync_bounds_for_uuid(partition_column_type)
+    #             sync_bounds.append({"column":partition_column, "start":start, "end":end, "column_type":partition_column_type})
+    #         else:
+    #             start, end = await self.source_backend.get_partition_bounds(partition_column)
+    #             if strategy == SyncStrategy.FULL:
+    #                 sync_bounds.append({"column":partition_column, "start":start, "end":end, "column_type":partition_column_type})
+    #             else:
+    #                 # if strategy is hash, we need to get the bounds from the destination
+    #                 dest_start, dest_end = await self.destination_backend.get_partition_bounds(partition_column)
+    #                 start = min(start, dest_start)
+    #                 end = max(end, dest_end)
+    #                 sync_bounds.append({"column":partition_column, "start":start, "end":end, "column_type":partition_column_type})
+        
+    #     return sync_bounds
     
-    async def _generate_job_partitions(self, strategy_config: StrategyConfig, sync_start: Any, sync_end: Any) -> List[Partition]:
-        """Generate all partitions for the job"""
+    # def get_sync_bounds_for_uuid(self, partition_column_type: UniversalDataType) -> Tuple[Any, Any]:
+    #     start = "00000000000000000000000000000000"
+    #     end = "ffffffffffffffffffffffffffffffff"
+    #     if partition_column_type == UniversalDataType.UUID_TEXT_DASH:
+    #         return str(uuid.UUID(start)), str(uuid.UUID(end))
+    #     elif partition_column_type == UniversalDataType.UUID_TEXT:
+    #         return start, end
+    #     else:
+    #         return uuid.UUID(start), uuid.UUID(end)
+    
+    def _generate_job_partitions(self, partition_dimensions: List[PartitionDimensionConfig], sync_bounds: List[Dict[str, Any]]) -> Generator[Any, None, None]:
+        """Generate all partitions for the job - supports both legacy and multi-dimensional partitioning"""
+        generator = MultiDimensionalPartitionGenerator(partition_dimensions)
         
-        partition_column_info = self.column_schema.column(strategy_config.partition_column)
-        partition_column_type = partition_column_info.dtype if partition_column_info.dtype else strategy_config.partition_column_type
+        # Generate multi-dimensional partitions
+        yield from generator.generate_all_partitions(sync_bounds)
+        # return await self._generate_multi_dimensional_partitions(strategy_config, sync_bounds)
+    
+    # async def _generate_multi_dimensional_partitions(self, strategy_config: StrategyConfig, 
+    #                                                sync_bounds: List[Dict[str, Any]]) -> List[Partition]:
+    #     """Generate multi-dimensional partitions"""
+    #     # import pdb; pdb.set_trace()
         
-        partition_step = getattr(strategy_config, 'partition_step', 1000)
-        partition_generator = PartitionGenerator(PartitionConfig(
-            name="main_partition_{pid}",
-            column=partition_column_info.name,
-            column_type=partition_column_type,
-            partition_step=partition_step
-        ))
+    #     # Build sync bounds for all dimensions
+    #     # sync_bounds_map = {bound["column"]: (bound["start"], bound["end"]) for bound in sync_bounds}
+
+
         
-        return await partition_generator.generate_partitions(sync_start, sync_end)
+    #     # Collect all unique columns from primary and secondary partitions
+    #     # all_columns = set()
+    #     # for dim in strategy_config.primary_partitions:
+    #     #     all_columns.add(dim.column)
+        
+    #     # if strategy_config.secondary_partitions:
+    #     #     for dim in strategy_config.secondary_partitions:
+    #     #         all_columns.add(dim.column)
+        
+    #     # # Get bounds for each column
+    #     # for column in all_columns:
+    #     #     column_info = self.column_schema.column(column)
+    #     #     column_type = column_info.dtype if column_info else None
+            
+    #     #     # For now, use the same sync bounds for all columns
+    #     #     # In the future, you might want to get column-specific bounds
+    #     #     if column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+    #     #         # Use UUID bounds
+    #     #         start = "00000000000000000000000000000000"
+    #     #         end = "ffffffffffffffffffffffffffffffff"
+    #     #         if column_type == UniversalDataType.UUID_TEXT_DASH:
+    #     #             sync_bounds[column] = (str(uuid.UUID(start)), str(uuid.UUID(end)))
+    #     #         elif column_type == UniversalDataType.UUID_TEXT:
+    #     #             sync_bounds[column] = (start, end)
+    #     #         else:
+    #     #             sync_bounds[column] = (uuid.UUID(start), uuid.UUID(end))
+    #     #     else:
+    #     #         # Use provided bounds or get from backend
+    #     #         if column == strategy_config.partition_column:
+    #     #             sync_bounds[column] = (sync_start, sync_end)
+    #     #         else:
+    #     #             # Get bounds from backend for this column
+    #     #             bounds = await self.source_backend.get_partition_bounds(column)
+    #     #             sync_bounds[column] = bounds
+        
+    #     # Create multi-dimensional partition generator
+    #     md_config = MultiDimensionalPartitionConfig(
+    #         dimensions=strategy_config.primary_partitions,
+    #         column_schema=self.column_schema
+    #     )
+        
+    #     generator = MultiDimensionalPartitionGenerator(md_config)
+        
+    #     # Generate multi-dimensional partitions
+    #     md_partitions = await generator.generate_all_partitions(sync_bounds)
+        
+    #     # # Convert to legacy partitions for backward compatibility
+    #     # primary_column = strategy_config.primary_partitions[0].column if strategy_config.primary_partitions else strategy_config.partition_column
+    #     # legacy_partitions = convert_to_legacy_partitions(md_partitions, primary_column)
+        
+    #     # # Set column types
+    #     # for partition in legacy_partitions:
+    #     #     column_info = self.column_schema.column(partition.column)
+    #     #     partition.column_type = column_info.dtype if column_info else "string"
+        
+    #     return md_partitions
+    
+    # async def _generate_legacy_partitions(self, strategy_config: StrategyConfig, sync_start: Any, sync_end: Any) -> List[Partition]:
+    #     """Generate legacy single-dimension partitions (existing logic)"""
+    #     partition_column_info = self.column_schema.column(strategy_config.partition_column)
+    #     partition_column_type = partition_column_info.dtype if partition_column_info.dtype else strategy_config.partition_column_type
+        
+    #     partition_step = getattr(strategy_config, 'partition_step', 1000)
+    #     partition_generator = PartitionGenerator(PartitionConfig(
+    #         name="main_partition_{pid}",
+    #         column=partition_column_info.name,
+    #         column_type=partition_column_type,
+    #         partition_step=partition_step
+    #     ))
+        
+    #     return await partition_generator.generate_partitions(sync_start, sync_end)
     
     # async def _process_full_partitions_concurrent(self, job_context, partitions: List[Partition], 
     #                                             strategy_config: StrategyConfig) -> AsyncIterator[DataBatch]:

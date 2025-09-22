@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, AsyncIterator, TypeVar, Generic, U
 from datetime import datetime
 import uuid
 
-from ..core.models import GlobalStageConfig, Partition, StrategyConfig, PipelineJobConfig
+from ..core.models import GlobalStageConfig, StrategyConfig, PipelineJobConfig, MultiDimensionalPartition
 
 
 # Type variables for pipeline data
@@ -31,7 +31,7 @@ class StageConfig:
 @dataclass
 class PipelineContext:
     """Context object that flows through the pipeline stages"""
-    partition: Partition
+    partition: MultiDimensionalPartition
     strategy_config: StrategyConfig
     metadata: Dict[str, Any] = field(default_factory=dict)
     pipeline_id: str = field(default_factory=lambda: str(uuid.uuid4()))

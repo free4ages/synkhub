@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 from ..core.models import (
     PipelineJobConfig, DataStorage, DataStore, ConnectionConfig, 
     BackendConfig, Column, GlobalStageConfig, StrategyConfig, 
-    TransformationConfig, JoinConfig, FilterConfig
+    TransformationConfig, JoinConfig, FilterConfig, PartitionDimensionConfig
 )
 from ..core.enums import SyncStrategy, HashAlgo
 from ..core.schema_models import UniversalDataType
@@ -29,27 +29,49 @@ class ConfigLoader:
         """Load configuration from dictionary"""
         # import pdb; pdb.set_trace()
         processed_config = config_dict.copy()
-        global_columns_map = {}
-        if 'columns' in processed_config:
-            for col_dict in processed_config['columns']:
-                global_columns_map[col_dict['name']] = col_dict
+        # global_columns_map = {}
+        # if 'columns' in processed_config:
+        #     for col_dict in processed_config['columns']:
+        #         global_columns_map[col_dict['name']] = col_dict
 
         backends_map = {}
         if 'backends' in processed_config:
             for backend_dict in processed_config['backends']:
                 backends_map[backend_dict['name']] = backend_dict
-                if 'columns' in backend_dict:
-                    for col_dict in backend_dict['columns']:
-                        global_column = global_columns_map.get(col_dict['name']) or {}
-                        for key, value in col_dict.items():
-                            if key!='expr' and key not in global_column:
-                                global_column[key] = value
-                        global_columns_map[col_dict['name']] = global_column 
+                if not 'columns' in backend_dict:
+                    raise ValueError(f"Columns are required for backend {backend_dict['name']}")
+                
+                backend_dict['db_columns'] = [Column(**col) for col in ConfigLoader._process_columns(backend_dict['columns'])]
+                # if 'hash_columns' in backend_dict:
+                #     #prepare hash columns and hash_key column
+                #     hash_columns = []
+                #     columns_map = {col['name']: col for col in backend_dict['columns']}
+                #     for name in backend_dict['hash_columns']:
+                #         # get column expr and dtype
+                #         col = columns_map.get(name)
+                #         if not col:
+                #             raise ValueError(f"Column {name} not found in backend {backend_dict['name']}")
+                #         hash_columns.append(Column(name=name, expr=(col.get("expr") or name), dtype=col['dtype']))
+                #     backend_dict['hash_columns'] = hash_columns
+                # if 'hash_key_column' in backend_dict:
+                #     # columns_map = {col['name']: col for col in backend_dict['columns']}
+                #     hash_key_column = next((col for col in backend_dict['columns'] if col['name'] == backend_dict['hash_key_column']), None)
+                #     if not hash_key_column:
+                #         raise ValueError(f"Hash key column {backend_dict['hash_key_column']} not found in backend {backend_dict['name']}")
+                #     backend_dict['hash_key_column'] = Column(name=backend_dict['hash_key_column'], expr=(hash_key_column.get("expr") or backend_dict['hash_key_column']), dtype=hash_key_column['dtype'])
+                
+                # if 'columns' in backend_dict:
+                #     for col_dict in backend_dict['columns']:
+                #         global_column = global_columns_map.get(col_dict['name']) or {}
+                #         for key, value in col_dict.items():
+                #             if key!='expr' and key not in global_column:
+                #                 global_column[key] = value
+                #         global_columns_map[col_dict['name']] = global_column 
         
         # Process top-level columns
-        if global_columns_map:
-            global_columns_dict = ConfigLoader._process_columns(list(global_columns_map.values()))
-            processed_config['columns'] = [Column(**x) for x in global_columns_dict]
+        # if global_columns_map:
+        #     global_columns_dict = ConfigLoader._process_columns(list(global_columns_map.values()))
+        #     processed_config['columns'] = [Column(**x) for x in global_columns_dict]
         global_max_concurrent_partitions = 1
         if 'max_concurrent_partitions' in processed_config:
             global_max_concurrent_partitions = processed_config['max_concurrent_partitions']
@@ -67,7 +89,7 @@ class ConfigLoader:
             processed_stages = []
             for stage_dict in processed_config['stages']:
                 stage_dict['hash_algo'] = hash_algo
-                stage = ConfigLoader._process_stage(stage_dict, backends_map, global_columns_dict, global_strategies)
+                stage = ConfigLoader._process_stage(stage_dict, backends_map, global_strategies)
                 processed_stages.append(stage)
             processed_config['stages'] = processed_stages
         
@@ -147,7 +169,7 @@ class ConfigLoader:
         return pipeline_config, datastores
     
     @staticmethod
-    def _process_columns(columns_data: List[Dict[str, Any]], hash_columns: List[str] = [], hash_key: str = None) -> List[Dict[str, Any]]:
+    def _process_columns(columns_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Process column configurations into Column objects"""
         columns = []
         for col_dict in columns_data:
@@ -162,35 +184,35 @@ class ConfigLoader:
             # Set expr to name if not provided (for top-level columns)
             if 'expr' not in col_dict:
                 col_dict['expr'] = col_dict['name']
-            if col_dict['name'] in hash_columns:
-                col_dict['hash_column'] = True
-            if col_dict['name'] == hash_key:
-                col_dict['hash_key'] = True
-            
             columns.append(col_dict)
         return columns
     
     @staticmethod
-    def _process_stage(stage_dict: Dict[str, Any], backends_map: Dict[str, Any], global_columns: List[Dict[str, Any]], global_strategies: List[StrategyConfig]) -> GlobalStageConfig:
+    def _process_stage(stage_dict: Dict[str, Any], backends_map: Dict[str, Any], global_strategies: List[StrategyConfig]) -> GlobalStageConfig:
         """Process stage configuration into GlobalStageConfig object"""
+        # import pdb; pdb.set_trace()
         processed_stage = stage_dict.copy()
         # import pdb; pdb.set_trace()
 
-        # Process columns - inherit from global if not specified
-        stage_columns_dict = []
-        if 'columns' in processed_stage:
-            stage_columns_dict = ConfigLoader._process_columns(processed_stage['columns'], hash_columns=processed_stage.pop('hash_columns', []), hash_key= processed_stage.pop('hash_key', None))
-            # Apply inheritance from global columns
-            stage_columns_dict = ConfigLoader._inherit_columns(stage_columns_dict, global_columns)
-        else:
-            # If no stage-specific columns, use global columns
-            stage_columns_dict = global_columns.copy()
+        # # Process columns - inherit from global if not specified
+        # stage_columns_dict = []
+        # if 'columns' in processed_stage:
+        #     stage_columns_dict = ConfigLoader._process_columns(processed_stage['columns'], hash_columns=processed_stage.pop('hash_columns', []), hash_key= processed_stage.pop('hash_key', None))
+        #     # Apply inheritance from global columns
+        #     stage_columns_dict = ConfigLoader._inherit_columns(stage_columns_dict, global_columns)
+        # else:
+        #     # If no stage-specific columns, use global columns
+        #     stage_columns_dict = global_columns.copy()
         
-        processed_stage['columns'] = [Column(**x) for x in stage_columns_dict]
+        # processed_stage['columns'] = [Column(**x) for x in stage_columns_dict]
+        stage_columns_dict = []
+        processed_stage['columns'] = []
         
         # Process source backend if present
         if 'source' in processed_stage and isinstance(processed_stage['source'], dict):
             if 'name' in processed_stage['source'] and processed_stage['source']['name'] in backends_map:
+                if 'columns' in backends_map[processed_stage['source']['name']]:
+                    stage_columns_dict = ConfigLoader._process_columns(backends_map[processed_stage['source']['name']]['columns'])
                 source_dict = processed_stage['source'].copy()
                 processed_stage['source'].update(backends_map[processed_stage['source']['name']])
                 processed_stage['source'].update(source_dict)
@@ -202,7 +224,8 @@ class ConfigLoader:
         # Process destination backend if present
         if 'destination' in processed_stage and isinstance(processed_stage['destination'], dict):
             if 'name' in processed_stage['destination'] and processed_stage['destination']['name'] in backends_map:
-                processed_stage['destination'].update(backends_map[processed_stage['destination']['name']])
+                if 'columns' in backends_map[processed_stage['destination']['name']]:
+                    stage_columns_dict = ConfigLoader._process_columns(backends_map[processed_stage['destination']['name']]['columns'])
                 dest_dict = processed_stage['destination'].copy()
                 processed_stage['destination'].update(backends_map[processed_stage['destination']['name']])
                 processed_stage['destination'].update(dest_dict)
@@ -250,7 +273,7 @@ class ConfigLoader:
         # Process columns - inherit from global if not specified
         backend_columns = []
         if 'columns' in processed_backend:
-            backend_columns = ConfigLoader._process_columns(processed_backend['columns'], hash_columns=processed_backend.pop('hash_columns', []), hash_key=processed_backend.pop('hash_key', None))
+            backend_columns = ConfigLoader._process_columns(processed_backend['columns'])
             # Apply inheritance from global columns
             backend_columns = ConfigLoader._inherit_columns(backend_columns, global_columns)
         else:
@@ -279,6 +302,11 @@ class ConfigLoader:
     def _process_strategy(strategy_dict: Dict[str, Any]) -> StrategyConfig:
         """Process strategy configuration into StrategyConfig object"""
         processed_strategy = strategy_dict.copy()
+
+        if 'primary_partitions' in processed_strategy:
+            processed_strategy['primary_partitions'] = [PartitionDimensionConfig(**x) for x in processed_strategy['primary_partitions']]
+        if 'secondary_partitions' in processed_strategy:
+            processed_strategy['secondary_partitions'] = [PartitionDimensionConfig(**x) for x in processed_strategy['secondary_partitions']]
         
         # Convert type string to SyncStrategy enum
         if 'type' in processed_strategy and isinstance(processed_strategy['type'], str):
@@ -287,13 +315,7 @@ class ConfigLoader:
             except ValueError:
                 raise ValueError(f"Invalid strategy type: {processed_strategy['type']}")
         
-        # Handle typo in YAML: "parition_key" -> "partition_column"
-        if 'parition_key' in processed_strategy:
-            processed_strategy['partition_column'] = processed_strategy.pop('parition_key')
-        
-        # Handle inconsistency: "use_sub_partition" -> "use_sub_partition"
-        if 'use_sub_partition' in processed_strategy:
-            processed_strategy['use_sub_partition'] = processed_strategy.pop('use_sub_partition')
+
         
         return StrategyConfig(**processed_strategy)
 
@@ -376,9 +398,9 @@ class ConfigLoader:
                 if not strategy.name:
                     issues.append(f"Strategy name is required in stage '{stage.name}'")
                 
-                # Check if strategy has either column or partition_column specified
-                if  not strategy.partition_column:
-                    issues.append(f"Strategy '{strategy.name}' in stage '{stage.name}' must specify 'partition_column'")
+                # # Check if strategy has either column or partition_column specified
+                # if  not strategy.partition_column:
+                #     issues.append(f"Strategy '{strategy.name}' in stage '{stage.name}' must specify 'partition_column'")
         
         return issues
     
