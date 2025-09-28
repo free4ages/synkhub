@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field, asdict
 from typing import List, Any, Optional, Union
-from ..core.models import PartitionDimensionConfig, MultiDimensionalPartition
+from ..core.models import DimensionPartitionConfig, MultiDimensionPartition
 
 @dataclass
 class BlockHashMeta:
@@ -31,8 +31,8 @@ class BlockNameMeta:
     strategy: str
     # partition_column_type: str
     # intervals: Optional[List[int]]
-    partition_dimensions: Optional[List[PartitionDimensionConfig]] = None
-    parent_partition: Optional[MultiDimensionalPartition] = None
+    partition_dimensions: Optional[List[DimensionPartitionConfig]] = None
+    parent_partition: Optional[MultiDimensionPartition] = None
     # parent_partition_id: Optional[str] = None
 
    

@@ -98,7 +98,7 @@ def cast_value(value: Any, target_type: UniversalDataType) -> Any:
         elif target_type == UniversalDataType.DATETIME:
             if isinstance(value, str):
                 # Try common datetime formats
-                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"]:
+                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f","%Y-%m-%d"]:
                     try:
                         return datetime.strptime(value, fmt)
                     except ValueError:
@@ -106,6 +106,8 @@ def cast_value(value: Any, target_type: UniversalDataType) -> Any:
                 raise ValueError(f"Cannot parse datetime string: {value}")
             elif isinstance(value, datetime):
                 return value.replace(tzinfo=None)
+            elif isinstance(value, date):
+                return datetime.combine(value, datetime.min.time())
             elif isinstance(value, (int, float)):
                 # Unix timestamp
                 return datetime.fromtimestamp(value)

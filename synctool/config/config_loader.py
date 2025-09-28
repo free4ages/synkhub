@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 from ..core.models import (
     PipelineJobConfig, DataStorage, DataStore, ConnectionConfig, 
     BackendConfig, Column, GlobalStageConfig, StrategyConfig, 
-    TransformationConfig, JoinConfig, FilterConfig, PartitionDimensionConfig
+    TransformationConfig, JoinConfig, FilterConfig, DimensionPartitionConfig
 )
 from ..core.enums import SyncStrategy, HashAlgo
 from ..core.schema_models import UniversalDataType
@@ -47,18 +47,18 @@ class ConfigLoader:
                 #     hash_columns = []
                 #     columns_map = {col['name']: col for col in backend_dict['columns']}
                 #     for name in backend_dict['hash_columns']:
-                #         # get column expr and dtype
+                #         # get column expr and data_type
                 #         col = columns_map.get(name)
                 #         if not col:
                 #             raise ValueError(f"Column {name} not found in backend {backend_dict['name']}")
-                #         hash_columns.append(Column(name=name, expr=(col.get("expr") or name), dtype=col['dtype']))
+                #         hash_columns.append(Column(name=name, expr=(col.get("expr") or name), data_type=col['data_type']))
                 #     backend_dict['hash_columns'] = hash_columns
                 # if 'hash_key_column' in backend_dict:
                 #     # columns_map = {col['name']: col for col in backend_dict['columns']}
                 #     hash_key_column = next((col for col in backend_dict['columns'] if col['name'] == backend_dict['hash_key_column']), None)
                 #     if not hash_key_column:
                 #         raise ValueError(f"Hash key column {backend_dict['hash_key_column']} not found in backend {backend_dict['name']}")
-                #     backend_dict['hash_key_column'] = Column(name=backend_dict['hash_key_column'], expr=(hash_key_column.get("expr") or backend_dict['hash_key_column']), dtype=hash_key_column['dtype'])
+                #     backend_dict['hash_key_column'] = Column(name=backend_dict['hash_key_column'], expr=(hash_key_column.get("expr") or backend_dict['hash_key_column']), data_type=hash_key_column['data_type'])
                 
                 # if 'columns' in backend_dict:
                 #     for col_dict in backend_dict['columns']:
@@ -173,10 +173,10 @@ class ConfigLoader:
         """Process column configurations into Column objects"""
         columns = []
         for col_dict in columns_data:
-            # Convert dtype string to UniversalDataType enum if present
-            if 'dtype' in col_dict and isinstance(col_dict['dtype'], str):
+            # Convert data_type string to UniversalDataType enum if present
+            if 'data_type' in col_dict and isinstance(col_dict['data_type'], str):
                 try:
-                    col_dict['dtype'] = UniversalDataType(col_dict['dtype'])
+                    col_dict['data_type'] = UniversalDataType(col_dict['data_type'])
                 except ValueError:
                     # Keep as string if not a valid enum value
                     pass
@@ -304,9 +304,11 @@ class ConfigLoader:
         processed_strategy = strategy_dict.copy()
 
         if 'primary_partitions' in processed_strategy:
-            processed_strategy['primary_partitions'] = [PartitionDimensionConfig(**x) for x in processed_strategy['primary_partitions']]
+            processed_strategy['primary_partitions'] = [DimensionPartitionConfig(**x) for x in processed_strategy['primary_partitions']]
         if 'secondary_partitions' in processed_strategy:
-            processed_strategy['secondary_partitions'] = [PartitionDimensionConfig(**x) for x in processed_strategy['secondary_partitions']]
+            processed_strategy['secondary_partitions'] = [DimensionPartitionConfig(**x) for x in processed_strategy['secondary_partitions']]
+        if 'delta_partitions' in processed_strategy:
+            processed_strategy['delta_partitions'] = [DimensionPartitionConfig(**x) for x in processed_strategy['delta_partitions']]
         
         # Convert type string to SyncStrategy enum
         if 'type' in processed_strategy and isinstance(processed_strategy['type'], str):
@@ -364,7 +366,7 @@ class ConfigLoader:
         # merged_dict = {
         #     'name': stage_col['name'],
         #     'expr': stage_col['expr'] if stage_col.get('expr') != stage_col['name'] else global_col.get('expr',None),
-        #     'dtype': stage_col['dtype'] if stage_col.get('dtype') is not None else global_col.get('dtype',None),
+        #     'data_type': stage_col['data_type'] if stage_col.get('data_type') is not None else global_col.get('data_type',None),
         #     'hash_column': stage_col['hash_column'] if (stage_col.get('hash_column') is not None) else global_col.get('hash_column',False),
         #     'data_column': stage_col['data_column'] if (stage_col.get('data_column') is not None) else global_col.get('data_column',False),
         #     'unique_column': stage_col['unique_column'] if (stage_col.get('unique_column') is not None) else global_col.get('unique_column',False),

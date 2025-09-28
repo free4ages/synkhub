@@ -6,7 +6,7 @@ from ..base import PipelineStage, DataBatch, StageConfig
 from ...utils.data_comparator import calculate_row_status
 from ...core.enums import DataStatus, HashAlgo, SyncStrategy
 from ...core.models import DataStorage, BackendConfig, Column
-from ...core.models import StrategyConfig
+from ...core.models import StrategyConfig, PipelineJobConfig
 
 
 if TYPE_CHECKING:
@@ -25,9 +25,9 @@ class DataFetchStageConfig(StageConfig):
 class DataFetchStage(PipelineStage):
     """Stage that fetches data from source systems"""
     
-    def __init__(self, sync_engine: Any, config: Dict[str, Any] = None, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
+    def __init__(self, sync_engine: Any, config: Dict[str, Any] , pipeline_config: PipelineJobConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
         config = DataFetchStageConfig.from_global_stage_config(config)
-        super().__init__(config.name, config, logger)
+        super().__init__(config.name, config, pipeline_config, logger)
         self.sync_engine = sync_engine
         self.source_backend = sync_engine.create_backend(self.config.source)
         self.destination_backend = None
@@ -56,10 +56,11 @@ class DataFetchStage(PipelineStage):
         change_type = metadata["change_type"]
         job_context = batch.context
         strategy_config = job_context.metadata.get("strategy_config")
+        # import pdb; pdb.set_trace()
         
         try:
             if change_type in (DataStatus.ADDED, DataStatus.MODIFIED):
-                async for batch in self._fetch_partition_row_hashes(self.source_backend, batch):
+                async for batch in self._fetch_partition_data(self.source_backend, batch):
                     # import pdb; pdb.set_trace()
                     yield batch
                 # if complete_partition:
@@ -163,21 +164,25 @@ class DataFetchStage(PipelineStage):
     #     # Note: deleted rows will be handled separately in the populate stage
     #     return added_rows + modified_rows
 
-    async def _fetch_partition_row_hashes(self, backend, batch: DataBatch):
+    async def _fetch_partition_data(self, backend, batch: DataBatch):
         """Fetch partition data with pagination support using generator pattern"""
+        sync_type = self.pipeline_config.sync_type
         partition = batch.batch_metadata.get("partition")
         strategy_config = batch.context.metadata.get("strategy_config")
         job_context = batch.context
         batch_metadata = batch.batch_metadata or {}
         use_pagination = strategy_config.use_pagination
+        if sync_type == "aggregate":
+            use_pagination = False
         page_size = strategy_config.page_size
         change_type = batch_metadata.get("change_type")
         if use_pagination:
             offset = 0
             
             while True:
-                data = await backend.fetch_partition_row_hashes(
+                data = await backend.fetch_partition_data(
                     partition,
+                    with_hash=True,
                     hash_algo=self.config.hash_algo,
                     page_size=page_size,
                     offset=offset
@@ -211,8 +216,10 @@ class DataFetchStage(PipelineStage):
                 offset += page_size
         else:
             # For non-paginated case, still yield each row
-            data = await backend.fetch_partition_row_hashes(
-                partition, hash_algo=self.config.hash_algo
+            data = await backend.fetch_partition_data(
+                partition,
+                with_hash=True,
+                hash_algo=self.config.hash_algo
             )
             batch.data = data
             batch_metadata["paginated"] = False

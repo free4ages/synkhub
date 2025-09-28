@@ -8,16 +8,16 @@ from synctool.core.column_mapper import ColumnSchema
 from synctool.core.models import Column
 
 from ..base import PipelineStage, DataBatch, StageConfig
-from ...core.models import GlobalStageConfig, MultiDimensionalPartition, StrategyConfig, DataStorage, BackendConfig, PartitionDimensionConfig, MultiDimensionalPartition
+from ...core.models import GlobalStageConfig, MultiDimensionPartition, StrategyConfig, DataStorage, BackendConfig, DimensionPartitionConfig, MultiDimensionPartition, PartitionBound, PipelineJobConfig
 from ...core.enums import DataStatus, SyncStrategy, HashAlgo
 from ...core.schema_models import UniversalDataType
 from ...utils.partition_generator import (
-    PartitionConfig, PartitionGenerator,
-    merge_adjacent, calculate_partition_status, to_partitions
+    calculate_partition_status
 )
 from ...utils.multi_dimensional_partition_generator import (
-    MultiDimensionalPartitionGenerator,
-    build_partitions,
+    build_multi_dimension_child_partitions,
+    generate_multi_dimension_partitions_from_partition_bounds,
+    build_multi_dimension_partitions_for_delta_data
 )
 
 
@@ -40,10 +40,10 @@ class ChangeDetectionConfig(StageConfig):
 class ChangeDetectionStage(PipelineStage):
     """Stage that handles strategy detection, sync bounds calculation, partition generation and change detection"""
     
-    def __init__(self, sync_engine: 'SyncEngine', config: GlobalStageConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
+    def __init__(self, sync_engine: 'SyncEngine', config: GlobalStageConfig, pipeline_config: PipelineJobConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
         # stage_config = ChangeDetectionConfig(**config)
         config = ChangeDetectionConfig.from_global_stage_config(config)
-        super().__init__(config.name, config, logger)
+        super().__init__(config.name, config, pipeline_config, logger)
         self.sync_engine = sync_engine
         self.strategies = self.config.strategies
         self.column_schema = ColumnSchema(config.columns)
@@ -85,7 +85,7 @@ class ChangeDetectionStage(PipelineStage):
             # job_context.metadata["strategy_config"] = strategy_config
             
             # # Step 2: Get sync bounds
-            # sync_start, sync_end = await self._get_sync_bounds(
+            # sync_start, sync_end = await self._get_partition_bounds(
             #     sync_strategy, 
             #     strategy_config, 
             #     job_context.user_start, 
@@ -163,12 +163,12 @@ class ChangeDetectionStage(PipelineStage):
     #         delta_strategy = next((s for s in self.strategies if s.name == "delta"), None)
     #         return SyncStrategy.DELTA, delta_strategy
     
-    # async def _get_sync_bounds(self, strategy: SyncStrategy, strategy_config: Optional[StrategyConfig], 
+    # async def _get_partition_bounds(self, strategy: SyncStrategy, strategy_config: Optional[StrategyConfig], 
     #                           start: Any, end: Any) -> Tuple[Any, Any]:
     #     """Get start and end bounds for sync"""
     #     if start and end:
     #         return start, end
-    #     partition_column_type = strategy_config.partition_column_type if strategy_config else self.column_schema.column(strategy_config.partition_column).dtype
+    #     partition_column_type = strategy_config.partition_column_type if strategy_config else self.column_schema.column(strategy_config.partition_column).data_type
         
     #     if strategy == SyncStrategy.DELTA and strategy_config:
     #         dest_start = await self.destination_backend.get_last_sync_point()
@@ -178,26 +178,26 @@ class ChangeDetectionStage(PipelineStage):
     #     if strategy_config and partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
     #         start = "00000000000000000000000000000000"
     #         end = "ffffffffffffffffffffffffffffffff"
-    #         if strategy_config.column_type == UniversalDataType.UUID_TEXT_DASH:
+    #         if strategy_config.data_type == UniversalDataType.UUID_TEXT_DASH:
     #             return str(uuid.UUID(start)), str(uuid.UUID(end))
-    #         elif strategy_config.column_type == UniversalDataType.UUID_TEXT:
+    #         elif strategy_config.data_type= UniversalDataType.UUID_TEXT:
     #             return start, end
     #         return uuid.UUID(start), uuid.UUID(end)
 
 
     #     return await self.source_backend.get_partition_bounds()
     
-    # async def _generate_job_partitions(self, strategy_config: StrategyConfig, sync_start: Any, sync_end: Any) -> List[MultiDimensionalPartition]:
+    # async def _generate_job_partitions(self, strategy_config: StrategyConfig, sync_start: Any, sync_end: Any) -> List[MultiDimensionPartition]:
     #     """Generate all partitions for the job"""
         
     #     partition_column_info = self.column_schema.column(strategy_config.partition_column)
-    #     partition_column_type = partition_column_info.dtype if partition_column_info.dtype else strategy_config.partition_column_type
+    #     partition_column_type = partition_column_info.data_type if partition_column_info.data_type else strategy_config.partition_column_type
         
     #     partition_step = getattr(strategy_config, 'partition_step', 1000)
     #     partition_generator = PartitionGenerator(PartitionConfig(
     #         name="main_partition_{pid}",
     #         column=partition_column_info.name,
-    #         column_type=partition_column_type,
+    #         data_type=partition_column_type,
     #         partition_step=partition_step
     #     ))
         
@@ -206,44 +206,67 @@ class ChangeDetectionStage(PipelineStage):
     async def _process_full_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any) -> AsyncIterator[DataBatch]:
         """Process full sync partitions concurrently"""
         partition = data_batch.batch_metadata.get("partition")
-        sync_bounds = await self._get_sync_bounds(strategy_config.type, strategy_config.secondary_partitions, partition)
-        generator = MultiDimensionalPartitionGenerator(strategy_config.secondary_partitions)
-        sub_partitions = generator.generate_all_partitions(sync_bounds, parent_partition=partition)
-        # sub_partitions = await self._generate_secondary_partitions(partition, strategy_config)
+        if strategy_config.secondary_partitions:
+            partition_bounds = await self._get_partition_bounds(strategy_config.type, strategy_config.secondary_partitions, partition)
+            # generator = MultiDimensionalPartitionGenerator(strategy_config.secondary_partitions)
+            sub_partitions = generate_multi_dimension_partitions_from_partition_bounds(partition_bounds, strategy_config.secondary_partitions, parent_partition=partition)
+            # sub_partitions = await self._generate_secondary_partitions(partition, strategy_config)
         
-        for sub_partition in sub_partitions:
-            # import pdb; pdb.set_trace()
+            for sub_partition in sub_partitions:
+                # import pdb; pdb.set_trace()
+                self.progress_manager.update_progress(total_partitions=1)
+                batch = DataBatch(
+                    data=[],
+                    context=job_context,
+                    batch_metadata={
+                        "partition": sub_partition,
+                        "change_type": DataStatus.ADDED,
+                        "complete_partition": True,
+                    }
+                )
+                # import pdb; pdb.set_trace()
+                yield batch
+        else:
             self.progress_manager.update_progress(total_partitions=1)
-            batch = DataBatch(
-                data=[],
-                context=job_context,
-                batch_metadata={
-                    "partition": sub_partition,
-                    "change_type": DataStatus.ADDED,
-                    "complete_partition": True,
-                }
-            )
-            # import pdb; pdb.set_trace()
-            yield batch
+            yield partition
     
     
     async def _process_delta_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any) -> AsyncIterator[DataBatch]:
         """Process delta sync partitions concurrently"""
         partition = data_batch.batch_metadata.get("partition")
-        sub_partitions = await self._generate_sub_partitions(partition, strategy_config)
-        self.progress_manager.update_progress(total_partitions=len(sub_partitions))
-        for sub_partition in sub_partitions:
-            batch = DataBatch(
-                data=[],
-                context=job_context,
-                batch_metadata={
-                    "partition": sub_partition,
-                    "change_type": DataStatus.MODIFIED,
-                    "complete_partition": False,
-                }
-            )
-            self.progress_manager.update_progress(total_partitions=1)
-            yield batch
+        async for batch in self._process_full_partitions(data_batch, strategy_config, job_context):
+            if not strategy_config.delta_partitions:
+                self.progress_manager.update_progress(total_partitions=1)
+                yield batch
+            else:
+                async for sub_partition in self._generate_delta_partitions(partition, strategy_config.delta_partitions, strategy_config):
+                    self.progress_manager.update_progress(total_partitions=1)
+                    batch = DataBatch(
+                        data=[],
+                        context=job_context,
+                        batch_metadata={
+                            "partition": sub_partition,
+                            "change_type": DataStatus.MODIFIED,
+                            "complete_partition": False,
+                        }
+                    )
+                    yield batch
+
+                
+        # sub_partitions = await self._generate_sub_partitions(partition, strategy_config)
+        # self.progress_manager.update_progress(total_partitions=len(sub_partitions))
+        # for sub_partition in sub_partitions:
+        #     batch = DataBatch(
+        #         data=[],
+        #         context=job_context,
+        #         batch_metadata={
+        #             "partition": sub_partition,
+        #             "change_type": DataStatus.MODIFIED,
+        #             "complete_partition": False,
+        #         }
+        #     )
+        #     self.progress_manager.update_progress(total_partitions=1)
+        #     yield batch
     
     async def _process_hash_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any, match_row_count: bool = True) -> AsyncIterator[DataBatch]:
         """Process hash sync partitions concurrently"""
@@ -287,7 +310,7 @@ class ChangeDetectionStage(PipelineStage):
         #     )
         #     yield batch
         
-        # async def process_partition(partition: MultiDimensionalPartition) -> List[DataBatch]:
+        # async def process_partition(partition: MultiDimensionPartition) -> List[DataBatch]:
         #     async with semaphore:
         #         # Build intervals for hash sync
         #         if strategy_config.intervals:
@@ -361,19 +384,20 @@ class ChangeDetectionStage(PipelineStage):
         #         for batch in batch_list:
         #             yield batch
     
-    async def _get_sync_bounds(self, sync_strategy: SyncStrategy, dimension_configs: List[PartitionDimensionConfig],parent_partition: MultiDimensionalPartition):
-        sync_bounds = []
+    async def _get_partition_bounds(self, sync_strategy: SyncStrategy, dimension_configs: List[DimensionPartitionConfig],parent_partition: MultiDimensionPartition):
+        partition_bounds = []
         for dimension_config in dimension_configs:
             column = dimension_config.column
             bounded = False
             if parent_partition.has_column(column):
-                start, end = parent_partition.get_bounds_for_column(column)
-                bounded = True
+                dim_bound = parent_partition.get_bound_for_column(column)
+                dim_bound.bounded = True
+                partition_bounds.append(dim_bound)
             else:
                 start, end = dimension_config.start, dimension_config.end
-                column_type = dimension_config.dtype or self.column_schema.column(column).dtype
-                dimension_config.dtype = column_type
-                if column_type not in (UniversalDataType.DATE, UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP, UniversalDataType.INTEGER):
+                data_type = dimension_config.data_type or self.column_schema.column(column).data_type
+                dimension_config.data_type = data_type
+                if data_type not in (UniversalDataType.DATE, UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP, UniversalDataType.INTEGER):
                     continue
                 # perhaps should raise error instead of warning
                 # raise warning if code reaches here to move this column of secondary partition to primary partition
@@ -400,35 +424,46 @@ class ChangeDetectionStage(PipelineStage):
                         source_start, source_end = await self.source_backend.get_partition_bounds(column)
                         dest_start, dest_end = await self.destination_backend.get_partition_bounds(column)
                         start = min(source_start, dest_start)
-            sync_bounds.append({"column":column, "start":start, "end":end, "bounded":bounded})
-        return sync_bounds
+                partition_bounds.append(PartitionBound(column=column, data_type=data_type, start=start, end=end, bounded=bounded))
+        return partition_bounds
 
-    async def _generate_secondary_partitions(self, partition: MultiDimensionalPartition, strategy_config: StrategyConfig) -> List[MultiDimensionalPartition]:
-        if strategy_config.secondary_partitions:
-            secondary_partition_config = PartitionConfig(
-                name="secondary_partition_{pid}",
-                column=partition.column,
-                column_type=partition.column_type,
-                partition_step=strategy_config.secondary_partition_step
-            )
-    async def _generate_sub_partitions(self, partition: MultiDimensionalPartition, strategy_config: StrategyConfig) -> List[MultiDimensionalPartition]:
-        """Generate sub-partitions if configured"""
-        if strategy_config.use_sub_partition:
-            sub_partition_config = PartitionConfig(
-                name="sub_partition_{pid}",
-                column=partition.column,
-                column_type=partition.column_type,
-                partition_step=strategy_config.sub_partition_step
-            )
-            sub_partition_generator = PartitionGenerator(sub_partition_config)
-            return await sub_partition_generator.generate_partitions(
-                partition.start, partition.end, partition
-            )
-        else:
-            return [partition]
+    # async def _generate_secondary_partitions(self, partition: MultiDimensionPartition, strategy_config: StrategyConfig) -> List[MultiDimensionPartition]:
+    #     if strategy_config.secondary_partitions:
+    #         secondary_partition_config = PartitionConfig(
+    #             name="secondary_partition_{pid}",
+    #             column=partition.column,
+    #             data_type=partition.data_type,
+    #             partition_step=strategy_config.secondary_partition_step
+    #         )
+    # async def _generate_sub_partitions(self, partition: MultiDimensionPartition, strategy_config: StrategyConfig) -> List[MultiDimensionPartition]:
+    #     """Generate sub-partitions if configured"""
+    #     if strategy_config.use_sub_partition:
+    #         sub_partition_config = PartitionConfig(
+    #             name="sub_partition_{pid}",
+    #             column=partition.column,
+    #             data_type=partition.data_type,
+    #             partition_step=strategy_config.sub_partition_step
+    #         )
+    #         sub_partition_generator = PartitionGenerator(sub_partition_config)
+    #         return await sub_partition_generator.generate_partitions(
+    #             partition.start, partition.end, partition
+    #         )
+    #     else:
+    #         return [partition]
     
-    async def _calculate_sub_partitions(self, partition: MultiDimensionalPartition, max_level: int = 100, 
-                                      page_size: int = 1000, match_row_count: bool = True, partition_dimensions: List[PartitionDimensionConfig] = None) -> AsyncIterator[Tuple[MultiDimensionalPartition, str]]:
+    async def _generate_delta_partitions(self, partition: MultiDimensionPartition, partition_dimensions: List[DimensionPartitionConfig], strategy_config: StrategyConfig) -> List[Dict[str, Any]]:
+        source_backend = self.source_backend
+        if not partition_dimensions:
+            yield partition
+        data = await source_backend.fetch_partition_data(partition, with_hash=False)
+        for partition in build_multi_dimension_partitions_for_delta_data(data, partition_dimensions):
+            yield partition
+
+
+
+    
+    async def _calculate_sub_partitions(self, partition: MultiDimensionPartition, max_level: int = 100, 
+                                      page_size: int = 1000, match_row_count: bool = True, partition_dimensions: List[DimensionPartitionConfig] = None) -> AsyncIterator[Tuple[MultiDimensionPartition, str]]:
         """Calculate sub-partitions for hash sync - now supports multi-dimensional partitions"""
         source_backend = self.source_backend
         destination_backend = self.destination_backend
@@ -445,7 +480,7 @@ class ChangeDetectionStage(PipelineStage):
         # d_partitions = to_partitions(destination_rows, partition)
         partitions, status_map = calculate_partition_status(src_rows, destination_rows, skip_row_count=not match_row_count)
 
-        for p in build_partitions(partitions, partition_dimensions, partition):
+        for p in build_multi_dimension_child_partitions(partitions, partition_dimensions, partition):
             yield p, status_map[p.partition_id]
         # for p in partitions:
         #     partition_id = p["partition_id"]
@@ -478,80 +513,80 @@ class ChangeDetectionStage(PipelineStage):
         #     ):
         #         yield part, status
     
-    async def _calculate_multi_dimensional_sub_partitions(self, partition: MultiDimensionalPartition, max_level: int, 
-                                                        page_size: int, match_row_count: bool) -> AsyncIterator[Tuple[MultiDimensionalPartition, str]]:
-        """Calculate sub-partitions for multi-dimensional partitions"""
-        md_partition = partition._multi_dimensional_partition
+    # async def _calculate_multi_dimensional_sub_partitions(self, partition: MultiDimensionPartition, max_level: int, 
+    #                                                     page_size: int, match_row_count: bool) -> AsyncIterator[Tuple[MultiDimensionPartition, str]]:
+    #     """Calculate sub-partitions for multi-dimensional partitions"""
+    #     md_partition = partition._multi_dimensional_partition
         
-        # Build WHERE clause for multi-dimensional partition
-        where_conditions = []
-        for column, (start, end) in md_partition.dimensions.items():
-            where_conditions.append(f"{column} >= %s AND {column} < %s")
+    #     # Build WHERE clause for multi-dimensional partition
+    #     where_conditions = []
+    #     for column, (start, end) in md_partition.dimensions.items():
+    #         where_conditions.append(f"{column} >= %s AND {column} < %s")
         
-        where_clause = " AND ".join(where_conditions)
-        where_params = []
-        for column, (start, end) in md_partition.dimensions.items():
-            where_params.extend([start, end])
+    #     where_clause = " AND ".join(where_conditions)
+    #     where_params = []
+    #     for column, (start, end) in md_partition.dimensions.items():
+    #         where_params.extend([start, end])
         
-        # Fetch hashes using the multi-dimensional WHERE clause
-        src_rows = await self.source_backend.fetch_child_partition_hashes_with_where(
-            where_clause, where_params, hash_algo=self.config.hash_algo
-        )
-        destination_rows = await self.destination_backend.fetch_child_partition_hashes_with_where(
-            where_clause, where_params, hash_algo=self.config.hash_algo
-        )
+    #     # Fetch hashes using the multi-dimensional WHERE clause
+    #     src_rows = await self.source_backend.fetch_child_partition_hashes_with_where(
+    #         where_clause, where_params, hash_algo=self.config.hash_algo
+    #     )
+    #     destination_rows = await self.destination_backend.fetch_child_partition_hashes_with_where(
+    #         where_clause, where_params, hash_algo=self.config.hash_algo
+    #     )
         
-        self.progress_manager.update_progress(detection_query_count=1)
+    #     self.progress_manager.update_progress(detection_query_count=1)
         
-        # Convert to single-dimension partitions for compatibility with existing logic
-        # This is a simplification - you might want to enhance this for true multi-dimensional comparison
-        s_partitions = to_partitions(src_rows, partition)
-        d_partitions = to_partitions(destination_rows, partition)
-        partitions, status_map = calculate_partition_status(s_partitions, d_partitions, skip_row_count=not match_row_count)
+    #     # Convert to single-dimension partitions for compatibility with existing logic
+    #     # This is a simplification - you might want to enhance this for true multi-dimensional comparison
+    #     s_partitions = to_partitions(src_rows, partition)
+    #     d_partitions = to_partitions(destination_rows, partition)
+    #     partitions, status_map = calculate_partition_status(s_partitions, d_partitions, skip_row_count=not match_row_count)
         
-        for p in partitions:
-            key = (p.start, p.end, p.level)
-            st = status_map[key]
+    #     for p in partitions:
+    #         key = (p.start, p.end, p.level)
+    #         st = status_map[key]
             
-            if st in ('M', 'A') and (p.num_rows > page_size and p.level < max_level):
-                # For multi-dimensional partitions, we might want to recursively subdivide
-                # This is a simplified approach - you could enhance this further
-                async for deeper_partition, deeper_status in self._calculate_single_dimension_sub_partitions(
-                    p, max_level, page_size, match_row_count
-                ):
-                    yield deeper_partition, deeper_status
-            else:
-                yield p, st
+    #         if st in ('M', 'A') and (p.num_rows > page_size and p.level < max_level):
+    #             # For multi-dimensional partitions, we might want to recursively subdivide
+    #             # This is a simplified approach - you could enhance this further
+    #             async for deeper_partition, deeper_status in self._calculate_single_dimension_sub_partitions(
+    #                 p, max_level, page_size, match_row_count
+    #             ):
+    #                 yield deeper_partition, deeper_status
+    #         else:
+    #             yield p, st
     
-    async def _calculate_single_dimension_sub_partitions(self, partition: MultiDimensionalPartition, max_level: int, 
-                                                       page_size: int, match_row_count: bool) -> AsyncIterator[Tuple[MultiDimensionalPartition, str]]:
-        """Calculate sub-partitions for single-dimension partitions (existing logic)"""
-        source_backend = self.source_backend
-        destination_backend = self.destination_backend
+    # async def _calculate_single_dimension_sub_partitions(self, partition: MultiDimensionPartition, max_level: int, 
+    #                                                    page_size: int, match_row_count: bool) -> AsyncIterator[Tuple[MultiDimensionPartition, str]]:
+    #     """Calculate sub-partitions for single-dimension partitions (existing logic)"""
+    #     source_backend = self.source_backend
+    #     destination_backend = self.destination_backend
         
-        src_rows = await source_backend.fetch_child_partition_hashes(
-            partition, hash_algo=self.config.hash_algo, 
-        )
-        destination_rows = await destination_backend.fetch_child_partition_hashes(
-            partition, hash_algo=self.config.hash_algo
-        )
-        self.progress_manager.update_progress(detection_query_count=1)
+    #     src_rows = await source_backend.fetch_child_partition_hashes(
+    #         partition, hash_algo=self.config.hash_algo, 
+    #     )
+    #     destination_rows = await destination_backend.fetch_child_partition_hashes(
+    #         partition, hash_algo=self.config.hash_algo
+    #     )
+    #     self.progress_manager.update_progress(detection_query_count=1)
         
-        s_partitions = to_partitions(src_rows, partition)
-        d_partitions = to_partitions(destination_rows, partition)
-        partitions, status_map = calculate_partition_status(s_partitions, d_partitions, skip_row_count=not match_row_count)
+    #     s_partitions = to_partitions(src_rows, partition)
+    #     d_partitions = to_partitions(destination_rows, partition)
+    #     partitions, status_map = calculate_partition_status(s_partitions, d_partitions, skip_row_count=not match_row_count)
         
-        for p in partitions:
-            key = (p.start, p.end, p.level)
-            st = status_map[key]
+    #     for p in partitions:
+    #         key = (p.start, p.end, p.level)
+    #         st = status_map[key]
             
-            if st in ('M', 'A') and (p.num_rows > page_size and p.level < max_level):
-                async for deeper_partition, deeper_status in self._calculate_single_dimension_sub_partitions(
-                    p, max_level, page_size, match_row_count
-                ):
-                    yield deeper_partition, deeper_status
-            else:
-                yield p, st
+    #         if st in ('M', 'A') and (p.num_rows > page_size and p.level < max_level):
+    #             async for deeper_partition, deeper_status in self._calculate_single_dimension_sub_partitions(
+    #                 p, max_level, page_size, match_row_count
+    #             ):
+    #                 yield deeper_partition, deeper_status
+    #         else:
+    #             yield p, st
 
     # async def _fetch_partition_row_hashes(self, backend, partition, strategy_config: StrategyConfig, job_context: Any):
     #     """Fetch partition data with pagination support using generator pattern"""

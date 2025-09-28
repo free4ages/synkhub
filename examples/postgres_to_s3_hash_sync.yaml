@@ -78,7 +78,7 @@ sync_job:
   strategies:
     - name: hash
       column: u.id
-      column_type: int
+      data_type: int
       partition_step: 10000
       sub_partition_step: 10
 

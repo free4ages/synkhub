@@ -22,15 +22,15 @@ column_map:
     dest: 'id'
     unique_column: true
     order_column: true
-    dtype: 'int'
+    data_type: 'int'
   - name: 'name'
     src: 'name'
     dest: 'name'
-    dtype: 'varchar'
+    data_type: 'varchar'
   - name: 'updated_at'
     src: 'updated_at'
     dest: 'updated_at'
-    dtype: 'timestamp'
+    data_type: 'timestamp'
 
 partition_column: 'id'
 partition_step: 1000

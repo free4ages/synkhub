@@ -10,10 +10,10 @@ from synctool.core.enums import HashAlgo, Capability
 from synctool.core.query_models import Query, Field, Filter, BlockHashMeta, BlockNameMeta, RowHashMeta, Table
 from synctool.utils.sql_builder import SqlBuilder
 from .base_backend import SqlBackend
-from ..core.models import Partition, Column
+from ..core.models import MultiDimensionPartition, Column
 from ..core.column_mapper import ColumnSchema
 from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
-from ..utils.hash_cache import HashCache
+# from ..utils.hash_cache import HashCache
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +252,7 @@ class StarRocksBackend(SqlBackend):
         min_val, max_val = result[0]['min_val'], result[0]['max_val']
         return min_val, max_val
 
-    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         if page_size is not None or offset is not None:
             order_by = [f"{c.expr} {c.direction}" for c in self.column_schema.order_columns] if self.column_schema.order_columns else [f"{self.column_schema.partition_column.expr} asc"]
@@ -262,7 +262,7 @@ class StarRocksBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
 
-    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key configured in column schema")
@@ -275,7 +275,7 @@ class StarRocksBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
 
-    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None, skip_cache=False) -> List[Dict]:
+    async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None, skip_cache=False) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
         # Use HashCache for optimized fetching
         fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo, page_size, offset)
@@ -284,11 +284,11 @@ class StarRocksBackend(SqlBackend):
         else:
             return await fallback_fn()
 
-    async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch child partition hashes"""
         # Use HashCache for optimized fetching
         if partition is None:
-            raise ValueError("Partition is required for hash cache operations")
+            raise ValueError("MultiDimensionPartition is required for hash cache operations")
         
         if not self.column_schema:
             raise ValueError("Column schema is required for hash cache operations")
@@ -301,14 +301,14 @@ class StarRocksBackend(SqlBackend):
         else:
             return await fallback_fn()
 
-    async def _fetch_child_partition_hashes_direct(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def _fetch_child_partition_hashes_direct(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Direct database fetch for child partition hashes - used by HashCache"""
         query: Query = self._build_partition_hash_query(partition, hash_algo)
         query = self._rewrite_query(query)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
 
-    async def _fetch_partition_row_hashes_direct(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def _fetch_partition_row_hashes_direct(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Direct database fetch for partition row hashes - used by HashCache"""
         return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo, page_size=page_size, offset=offset)
 
@@ -336,13 +336,13 @@ class StarRocksBackend(SqlBackend):
         
         unique_columns = [col.name for col in self.column_schema.unique_columns] if self.column_schema.unique_columns else []
         partition_column = self.column_schema.partition_column.name if self.column_schema.partition_column else ""
-        partition_column_type = str(self.column_schema.partition_column.dtype) if self.column_schema.partition_column else ""
+        partition_column_type = str(self.column_schema.partition_column.data_type) if self.column_schema.partition_column else ""
         
         # This would need intervals from the partition context - for now return empty
         # In practice, this would be called with proper context from partition processor
         return []
 
-    async def delete_partition_data(self, partition: Partition) -> int:
+    async def delete_partition_data(self, partition: MultiDimensionPartition) -> int:
         """Delete partition data from destination"""
         filters = self._build_filter_query()
         column = self.column_schema.column(partition.column)
@@ -354,7 +354,7 @@ class StarRocksBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params, action='delete')
 
-    async def delete_rows(self, rows: List[Dict], partition: Partition, strategy_config: StrategyConfig) -> int:
+    async def delete_rows(self, rows: List[Dict], partition: MultiDimensionPartition, strategy_config: StrategyConfig) -> int:
         """Delete rows from destination"""
         filters = self._build_filter_query()
         unique_columns = self.column_schema.unique_columns
@@ -367,7 +367,7 @@ class StarRocksBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params, action='delete')
 
-    async def fetch_partition_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_partition_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
         return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo)
 
@@ -443,12 +443,12 @@ class StarRocksBackend(SqlBackend):
         q = self._rewrite_query(query)
         return SqlBuilder.build(q, dialect='starrocks')
 
-    def _build_partition_hash_query(self, partition: Partition, hash_algo: HashAlgo) -> Query:
+    def _build_partition_hash_query(self, partition: MultiDimensionPartition, hash_algo: HashAlgo) -> Query:
         """Build partition hash query for StarRocks"""
         start = partition.start
         end = partition.end
         partition_column: Column = self.column_schema.column(partition.column)
-        partition_column_type: UniversalDataType | None = partition_column.dtype
+        partition_column_type: UniversalDataType | None = partition_column.data_type
 
         hash_column: Column | None = self.column_schema.hash_key
         order_columns: list[tuple[Column, str]] | None = self.column_schema.order_columns
@@ -520,7 +520,7 @@ class StarRocksBackend(SqlBackend):
     async def insert_data(
         self,
         data: List[Dict],
-        partition: Optional[Partition] = None,
+        partition: Optional[MultiDimensionPartition] = None,
         batch_size: int = 5000,
         upsert: bool = True
     ) -> int:

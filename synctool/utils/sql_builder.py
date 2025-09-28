@@ -20,6 +20,52 @@ class SqlBuilder:
             else:
                 raise ValueError(f"Unsupported dialect: {dialect}")
 
+        def handle_filter(flt, filter_exprs, params):
+            """Handle individual filter, including IN queries"""
+            if flt.operator.upper() == 'IN':
+                # Handle IN operator with list of values
+                if isinstance(flt.value, (list, tuple)):
+                    if not flt.value:  # Empty list
+                        filter_exprs.append("1=0")  # Always false condition
+                        return
+                    
+                    placeholders = []
+                    for value in flt.value:
+                        placeholder = get_placeholder(len(params))
+                        placeholders.append(placeholder)
+                        params.append(value)
+                    
+                    filter_exprs.append(f"{flt.column} IN ({', '.join(placeholders)})")
+                else:
+                    # Single value IN query (treat as equals)
+                    placeholder = get_placeholder(len(params))
+                    filter_exprs.append(f"{flt.column} IN ({placeholder})")
+                    params.append(flt.value)
+            elif flt.operator.upper() == 'NOT IN':
+                # Handle NOT IN operator with list of values
+                if isinstance(flt.value, (list, tuple)):
+                    if not flt.value:  # Empty list
+                        filter_exprs.append("1=1")  # Always true condition
+                        return
+                    
+                    placeholders = []
+                    for value in flt.value:
+                        placeholder = get_placeholder(len(params))
+                        placeholders.append(placeholder)
+                        params.append(value)
+                    
+                    filter_exprs.append(f"{flt.column} NOT IN ({', '.join(placeholders)})")
+                else:
+                    # Single value NOT IN query (treat as not equals)
+                    placeholder = get_placeholder(len(params))
+                    filter_exprs.append(f"{flt.column} NOT IN ({placeholder})")
+                    params.append(flt.value)
+            else:
+                # Handle regular operators (=, >, <, >=, <=, !=, LIKE, etc.)
+                placeholder = get_placeholder(len(params))
+                filter_exprs.append(f"{flt.column} {flt.operator} {placeholder}")
+                params.append(flt.value)
+
         # ---------------------------
         # DELETE QUERY
         # ---------------------------
@@ -46,9 +92,7 @@ class SqlBuilder:
             if query.filters:
                 filter_exprs = []
                 for flt in query.filters:
-                    placeholder = get_placeholder(len(params))
-                    filter_exprs.append(f"{flt.column} {flt.operator} {placeholder}")
-                    params.append(flt.value)
+                    handle_filter(flt, filter_exprs, params)
                 parts.append("WHERE " + " AND ".join(filter_exprs))
 
             # LIMIT (only supported in some DBs)
@@ -107,9 +151,7 @@ class SqlBuilder:
         if query.filters:
             filter_exprs = []
             for flt in query.filters:
-                placeholder = get_placeholder(len(params))
-                filter_exprs.append(f"{flt.column} {flt.operator} {placeholder}")
-                params.append(flt.value)
+                handle_filter(flt, filter_exprs, params)
             parts.append("WHERE " + " AND ".join(filter_exprs))
 
         # GROUP BY

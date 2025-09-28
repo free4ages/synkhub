@@ -79,7 +79,7 @@ sync_job:
     - name: delta
       type: delta
       column: u.updated_at
-      column_type: datetime
+      data_type: datetime
       partition_step: 1000
       sub_partition_step: 100
 

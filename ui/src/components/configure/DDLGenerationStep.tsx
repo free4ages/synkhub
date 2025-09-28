@@ -48,7 +48,7 @@ export const DDLGenerationStep: React.FC<DDLGenerationStepProps> = ({
                 name: transform.dest,
                 src: null, // Enrichment fields have src as null
                 dest: transform.dest,
-                dtype: transform.dtype,
+                data_type: transform.data_type,
                 unique_column: false,
                 order_column: false,
                 hash_key: false,
@@ -135,7 +135,7 @@ source_provider:
 ${mergedColumnMap.map(col => `  - name: ${col.name}
     src: ${col.src || 'null'}
     dest: ${col.dest || 'null'}
-    dtype: ${col.dtype || 'null'}
+    data_type: ${col.data_type || 'null'}
     unique_column: ${col.unique_column}
     order_column: ${col.order_column}
     hash_key: ${col.hash_key}
@@ -173,7 +173,7 @@ partition_step: ${config.partition_step || 'null'}`;
         - ${transform.columns.join('\n        - ')}
       transform: ${transform.transform}
       dest: ${transform.dest}
-      dtype: ${transform.dtype}`;
+      data_type: ${transform.data_type}`;
           });
         } else {
           console.log('No enrichment data found:', config.enrichment);

@@ -108,17 +108,17 @@ class ColumnMapper:
             dest: Any | None = f.get("dest")
             src_state: Any | None = f.get("src_state")
             dest_state: Any | None = f.get("dest_state")
-            dtype: Any | None = f.get("dtype")
-            dest_dtype: Any | None = f.get("dest_dtype") or f.get("dtype")
+            data_type: Any | None = f.get("data_type")
+            dest_dtype: Any | None = f.get("dest_dtype") or f.get("data_type")
             insert: bool = f.get("insert", True)
             expr_map: dict[str, str | None] = dict(source=src, destination=dest, source_state=src_state, destination_state=dest_state)
             if dest in enriched_column_details:
-                # if dtype is not provided, use the dtype from the enriched column details
-                if not dtype:
-                    dtype = enriched_column_details[dest]["dtype"]
-                # if dest_dtype is not provided, use the dtype from the enriched column details
+                # if data_type is not provided, use the data_type from the enriched column details
+                if not data_type:
+                    data_type = enriched_column_details[dest]["data_type"]
+                # if dest_dtype is not provided, use the data_type from the enriched column details
                 if not dest_dtype:
-                    dest_dtype = enriched_column_details[dest]["dtype"]
+                    dest_dtype = enriched_column_details[dest]["data_type"]
                 # if insert is not provided, use the insert from the enriched column details
                 insert = True
                 enriched_column_details.pop(dest)
@@ -132,29 +132,29 @@ class ColumnMapper:
                 roles.append("hash_key")
             if name == partition_column:
                 roles.append("partition_column")
-                assert dtype is not None, "Partition key must have a dtype"
+                assert data_type is not None, "Partition key must have a data_type"
             if name == delta_column:
                 roles.append("delta_column")
-                assert dtype is not None, "Delta key must have a dtype"
+                assert data_type is not None, "Delta key must have a data_type"
 
-            common_cols.append(Column(name=name, expr=name, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
+            common_cols.append(Column(name=name, expr=name, data_type=data_type, roles=roles, insert=True, expr_map=expr_map))
             # Source
             if src is not None:
-                source_cols.append(Column(name=name, expr=src, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
+                source_cols.append(Column(name=name, expr=src, data_type=data_type, roles=roles, insert=True, expr_map=expr_map))
             # Destination
             if insert:
-                dest_cols.append(Column(name=name, expr=dest, dtype=dest_dtype, roles=roles, insert=True, expr_map=expr_map))
+                dest_cols.append(Column(name=name, expr=dest, data_type=dest_dtype, roles=roles, insert=True, expr_map=expr_map))
 
             # Source state
             if src_state:
-                source_state_cols.append(Column(name=name, expr=src_state, dtype=dtype, roles=roles, insert=True, expr_map=expr_map))
+                source_state_cols.append(Column(name=name, expr=src_state, data_type=data_type, roles=roles, insert=True, expr_map=expr_map))
             # Destination state
             if dest_state and insert:
-                dest_state_cols.append(Column(name=name, expr=dest_state, dtype=dest_dtype, roles=roles, insert=True, expr_map=expr_map))
+                dest_state_cols.append(Column(name=name, expr=dest_state, data_type=dest_dtype, roles=roles, insert=True, expr_map=expr_map))
         for dest, details in enriched_column_details.items():
             expr_map: dict[str, str | None] = dict(source=None, destination=dest, source_state=None, destination_state=None)
-            dest_cols.append(Column(name=dest, expr=dest, dtype=details.get("dtype"), roles=["enriched_key"], insert=True, expr_map=expr_map))
-            common_cols.append(Column(name=dest, expr=dest, dtype=details.get("dtype"), roles=["enriched_key"], insert=True, expr_map=expr_map))
+            dest_cols.append(Column(name=dest, expr=dest, data_type=details.get("data_type"), roles=["enriched_key"], insert=True, expr_map=expr_map))
+            common_cols.append(Column(name=dest, expr=dest, data_type=details.get("data_type"), roles=["enriched_key"], insert=True, expr_map=expr_map))
 
         self.schemas = {
             "common": ColumnSchema(common_cols),

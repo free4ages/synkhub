@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from typing import Generator, Tuple
 from calendar import monthrange
+from dateutil.relativedelta import relativedelta
 
 epoch_date = date(1970, 1, 1)
 epoch_monday = date(1970, 1, 5)  # first Monday in 1970
@@ -11,7 +12,7 @@ def start_of_date(d: date) -> date:
 
 def end_of_date(d: date) -> date:
     """Return the end of the date (which is the date itself for inclusive ranges)"""
-    return d
+    return d + timedelta(days=1)
 
 def next_date(d: date) -> date:
     """Return the next date"""
@@ -44,28 +45,33 @@ def start_of_year(d: date) -> date:
 def end_of_week(d: date) -> date:
     """Return the end of the week (Sunday) for the given date"""
     week_start = start_of_week(d)
-    return week_start + timedelta(days=6)
+    return week_start + timedelta(weeks=1)
 
 def end_of_month(d: date) -> date:
     """Return the end of the month for the given date"""
-    _, last_day = monthrange(d.year, d.month)
-    return date(d.year, d.month, last_day)
+    month_start = start_of_month(d)
+    return month_start + relativedelta(months=1)
+    # _, last_day = monthrange(d.year, d.month)
+    # return date(d.year, d.month, last_day)
 
 def end_of_quarter(d: date) -> date:
     """Return the end of the quarter for the given date"""
     quarter_start = start_of_quarter(d)
-    if quarter_start.month == 1:  # Q1
-        return date(quarter_start.year, 3, 31)
-    elif quarter_start.month == 4:  # Q2
-        return date(quarter_start.year, 6, 30)
-    elif quarter_start.month == 7:  # Q3
-        return date(quarter_start.year, 9, 30)
-    else:  # Q4
-        return date(quarter_start.year, 12, 31)
+    return quarter_start + relativedelta(months=3)
+    # if quarter_start.month == 1:  # Q1
+    #     return date(quarter_start.year, 3, 31)
+    # elif quarter_start.month == 4:  # Q2
+    #     return date(quarter_start.year, 6, 30)
+    # elif quarter_start.month == 7:  # Q3
+    #     return date(quarter_start.year, 9, 30)
+    # else:  # Q4
+    #     return date(quarter_start.year, 12, 31)
 
 def end_of_year(d: date) -> date:
     """Return the end of the year for the given date"""
-    return date(d.year, 12, 31)
+    year_start = start_of_year(d)
+    return year_start + relativedelta(years=1)
+    # return date(d.year, 12, 31)
 
 def add_months(d: date, months: int) -> date:
     """Add months to a date"""
@@ -145,6 +151,11 @@ def ceil_to_next_unit(d: date, step: int, unit: str) -> date:
         return d
     return add_units(floored, 1)
 
+def get_boundary(d: date, step: int, unit: str) -> date:
+    start = align_to_boundary(d, step, unit)
+    end = add_units(start, 1, step, unit)
+    return start, end
+
 def get_partition_id(dt: date, step: int, unit: str) -> int:
     if unit == "day":
         return days_since_epoch(dt)//step
@@ -158,6 +169,8 @@ def get_partition_id(dt: date, step: int, unit: str) -> int:
         return years_since_epoch(dt)//step
     else:
         raise NotImplementedError(f"Unsupported unit: {unit}")
+
+
 
 def calculate_offset(start: date, unit: str) -> date:
     if unit == "day":

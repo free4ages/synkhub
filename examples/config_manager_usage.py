@@ -92,8 +92,8 @@ async def database_store_example():
             name="test_db_config",
             description="Test configuration stored in database",
             columns=[
-                Column(name="id", expr="id", dtype=UniversalDataType.INTEGER, unique_column=True),
-                Column(name="name", expr="name", dtype=UniversalDataType.VARCHAR)
+                Column(name="id", expr="id", data_type=UniversalDataType.INTEGER, unique_column=True),
+                Column(name="name", expr="name", data_type=UniversalDataType.VARCHAR)
             ],
             stages=[
                 GlobalStageConfig(
@@ -171,7 +171,7 @@ async def multi_store_example():
             name=config_data["name"],
             description=config_data["description"],
             columns=[
-                Column(name="id", expr="id", dtype=UniversalDataType.INTEGER, unique_column=True)
+                Column(name="id", expr="id", data_type=UniversalDataType.INTEGER, unique_column=True)
             ],
             stages=[
                 GlobalStageConfig(name="test_stage", type="test", enabled=True)

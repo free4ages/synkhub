@@ -39,7 +39,7 @@ class EnrichmentTransformation(BaseModel):
     columns: List[str]
     transform: str
     dest: str
-    dtype: str
+    data_type: str
 
 class SchemaExtractionRequest(BaseModel):
     source_connection: DatabaseConnection
@@ -50,7 +50,7 @@ class ColumnMapping(BaseModel):
     name: str
     src: Optional[str] = None
     dest: Optional[str] = None
-    dtype: Optional[str] = None
+    data_type: Optional[str] = None
     unique_column: bool = False  # For sync operations, not database constraints
     order_column: bool = False
     hash_key: bool = False
@@ -372,7 +372,7 @@ async def validate_config(config: MigrationConfig):
 #             'name': col.name,
 #             'src': col.name,  # Default to same name
 #             'dest': col.name,
-#             'dtype': col.data_type.value,
+#             'data_type': col.data_type.value,
 #             'unique_column': col.primary_key,  # Suggest primary keys as unique keys for sync
 #             'order_column': col.primary_key,   # Suggest primary keys as order keys
 #             'hash_key': False,  # Default to false
@@ -386,7 +386,7 @@ async def validate_config(config: MigrationConfig):
 #         'name': 'checksum',
 #         'src': None,  # Computed column
 #         'dest': 'checksum',
-#         'dtype': 'varchar',
+#         'data_type': 'varchar',
 #         'unique_column': False,
 #         'order_column': False,
 #         'hash_key': True,  # This is the hash key for change detection
@@ -464,7 +464,7 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
             'name': col_data['name'],
             'src': col_data['table_alias'] + '.' + col_data['name'] if col_data.get('table_alias') else col_data['name'],
             'dest': col_data['name'],
-            'dtype': col_data['data_type'],
+            'data_type': col_data['data_type'],
             'unique_column': col_data['primary_key'],
             'order_column': col_data['primary_key'],
             'hash_key': False,
@@ -478,7 +478,7 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
     #     'name': 'checksum',
     #     'src': None,
     #     'dest': 'checksum',
-    #     'dtype': 'varchar',
+    #     'data_type': 'varchar',
     #     'unique_column': False,
     #     'order_column': False,
     #     'hash_key': True,
@@ -569,7 +569,7 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
                     'columns': ['hash__'],
                     'transform': 'lambda x: x["hash__"]',
                     'dest': 'checksum',
-                    'dtype': 'varchar'
+                    'data_type': 'varchar'
                 }
             ]
         }
@@ -584,7 +584,7 @@ def _config_to_universal_schema(config: MigrationConfig):
     for col_mapping in config.column_map:
         column = UniversalColumn(
             name=col_mapping.dest or col_mapping.name,
-            data_type=UniversalDataType(col_mapping.dtype) if col_mapping.dtype else UniversalDataType.TEXT,
+            data_type=UniversalDataType(col_mapping.data_type) if col_mapping.data_type else UniversalDataType.TEXT,
             nullable=True,
             primary_key=col_mapping.unique_column,  # For sync operations
             unique=col_mapping.unique_column,

@@ -10,75 +10,87 @@ strategies:
   - name: 'delta'
     type: 'delta'
     default: true
-    partition_column: 'updated_at'
+    primary_partitions:
+      - column: 'updated_at'
+        step: 7200 # 2 hours
+        data_type: 'datetime'
+    secondary_partitions:
+      - column: 'updated_at'
+        step: 1800 # 30 minutes
+        data_type: 'datetime'
     # max_concurrent_partitions: 10
-    partition_step: 7200 # 2 hours
-    sub_partition_step: 1800  # 30 minutes
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
     use_pagination: true
-    use_sub_partition: false
   
   # Hash sync every 2 hours
   - name: 'hash'
     type: 'hash'
     default: true
     enabled: true
-    partition_column: 'uid'
-    partition_step: 90000000 # will create around 50 main partitions
-    sub_partition_step: 3000000 # will create around 10 sub partitions in each main partition
+    primary_partitions:
+      - column: 'uid'
+        step: 90000000 # will create around 50 main partitions
+        data_type: 'uuid'
+    secondary_partitions:
+      - column: 'uid'
+        step: 3000000 # will create around 10 sub partitions in each main partition
+        data_type: 'uuid'
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
     use_pagination: false
-    use_sub_partition: true
   
   # Full sync daily at 3 AM
   - name: 'full'
     type: 'full'
     default: true
     enabled: true
-    partition_column: 'uid'
-    partition_step: 90000000 # will create around 50 main partitions
-    sub_partition_step: 3000000 # will create around 10 sub partitions in each main partition
+    primary_partitions:
+      - column: 'uid'
+        step: 90000000 # will create around 50 main partitions
+        data_type: 'uuid'
+    secondary_partitions:
+      - column: 'uid'
+        step: 3000000 # will create around 10 sub partitions in each main partition
+        data_type: 'uuid'
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false
-    use_sub_partition: true
 
 # columns:
 #   - name: 'user_id'
 #     unique_column: true     # If true then it will be used as a unique key for the table. Default in false
 #     order_column: true      # If true then it will be used as a order key for the table. Default in false
 #     partition_column: true  # If true then it will be used as a partition key for the table. Default in false
-#     dtype: 'integer'
+#     data_type: 'integer'
 #     direction: 'asc'
 #     hash_column: true     # If true then it will be included in row hash calculation. Default in true
 #     data_column: true     # If true then it will be treated as a data field and will be included whenever a row is fetched. Default in true
 #   - name: 'first_name'
-#     dtype: 'varchar'
+#     data_type: 'varchar'
 #     hash_column: true
 #   - name: 'last_name'
-#     dtype: 'varchar'
+#     data_type: 'varchar'
 #     hash_column: true
 #   - name: 'email'
-#     dtype: 'varchar'
+#     data_type: 'varchar'
 #     hash_column: true
 #   - name: 'created_at'
-#     dtype: 'datetime'
+#     data_type: 'datetime'
 #     hash_column: true
 #   - name: 'updated_at'
-#     dtype: 'datetime'
+#     data_type: 'datetime'
 #     hash_column: true
 #     delta_column: true      # If true then it will be used as parition key fro delta strategy. Default in false
 #   - name: 'status'
-#     dtype: 'varchar'
+#     data_type: 'varchar'
 #     hash_column: true
 #   - name: 'name'
-#     dtype: 'varchar'
+#     data_type: 'varchar'
 #     hash_column: true
 #   - name: 'checksum'
-#     dtype: 'varchar'
+#     data_type: 'varchar'
 #     hash_key: true
 backends:
   - name: 'source_backend'
@@ -97,34 +109,34 @@ backends:
     columns:
       - name: 'user_id'
         expr: 'u.id'
-        dtype: 'integer'
+        data_type: 'integer'
       - name: 'uid'
         expr: 'u.uid'
-        dtype: 'uuid'
+        data_type: 'uuid'
         unique_column: true
         order_column: true
         direction: 'asc'
       - name: 'updated_at'
         expr: 'u.updated_at'
-        dtype: 'datetime'
+        data_type: 'datetime'
       - name: 'first_name'
         expr: 'u.first_name'
-        dtype: 'varchar'
+        data_type: 'varchar'
       - name: 'last_name'
         expr: 'u.last_name'
-        dtype: 'varchar'
+        data_type: 'varchar'
       - name: 'email'
         expr: 'p.email'
-        dtype: 'varchar'
+        data_type: 'varchar'
       - name: 'status'
         expr: 'u.status'
-        dtype: 'varchar'
+        data_type: 'varchar'
       - name: 'created_at'
         expr: 'u.created_at'
-        dtype: 'datetime'
+        data_type: 'datetime'
       - name: 'updated_at'
         expr: 'u.updated_at'
-        dtype: 'datetime'
+        data_type: 'datetime'
   - name: 'destination_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
@@ -134,7 +146,7 @@ backends:
     columns:
       - name: 'user_id'
       - name: 'uid'
-        dtype: 'uuid_text_dash'
+        data_type: 'uuid_text_dash'
       - name: 'updated_at'
         expr: 'source_updated_at'
       - name: 'created_at'
@@ -179,12 +191,12 @@ stages:
           - last_name
         transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
         expr: 'name'
-        dtype: 'varchar'
+        data_type: 'varchar'
       - columns:
           - uid
         transform: 'lambda x: str(x["uid"])'
         expr: 'uid'
-        dtype: 'uuid_text_dash'
+        data_type: 'uuid_text_dash'
   - name: 'populate'
     type: 'populate'
     enabled: true
@@ -208,5 +220,5 @@ stages:
   #           - last_name
   #         transform: 'lambda x: x["last_name"].upper()'
   #         dest: 'last_name'
-  #         dtype: 'varchar'
+  #         data_type: 'varchar'
 

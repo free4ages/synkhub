@@ -62,7 +62,7 @@ class PartitionProcessor:
             sub_partition_config: PartitionConfig = PartitionConfig(
                 name="sub_partition_{pid}",
                 column=self.partition.column,
-                column_type=self.partition.column_type,
+                data_type=self.partition.data_type,
                 partition_step=self.strategy_config.sub_partition_step
             )
             sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
@@ -150,7 +150,7 @@ class PartitionProcessor:
             sub_partition_config: PartitionConfig = PartitionConfig(
                 name="sub_partition_{pid}",
                 column=self.partition.column,
-                column_type=self.partition.column_type,
+                data_type=self.partition.data_type,
                 partition_step=self.strategy_config.sub_partition_step
             )
             sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)

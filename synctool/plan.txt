@@ -1,0 +1,275 @@
+https://chatgpt.com/share/68d5b302-2e64-800f-bf86-ad2093cac8d2
+# Python code to build a logical plan and produce a federated SQL execution plan
+# from an API request. This is a simplified but practical prototype you can adapt.
+#
+# It uses in-memory metadata (tables, dimensions, measures, relationships).
+# It supports:
+#  - resolving which fact/preagg tables supply requested measures/dimensions
+#  - building per-table Scan->Aggregate nodes (CTEs)
+#  - joining multiple fact subtotals on canonical dimensions (one-to-one)
+#  - joining dimension tables (many-to-one) to enrich results
+#  - pushing dimension filters to WHERE and measure filters to HAVING
+#
+# NOTE: This prototype focuses on correctness and clarity rather than SQL injection
+# safety or advanced cost-based optimization. In production, fetch metadata from
+# your catalog DB, validate/escape inputs, and use a proper planner/optimizer.
+
+from typing import List, Dict, Tuple, Optional
+import textwrap
+import pprint
+
+# ----------------------------
+# Example metadata (in-memory)
+# ----------------------------
+METADATA = {
+    "tables": {
+        # fact / preagg tables
+        "orders": {
+            "type": "fact",
+            "grain": ["user_id", "order_date_month"],
+            "dims": {"user_id": "user_id", "order_date_month": "DATE_TRUNC('month', order_date_day)"},
+            "measures": {"total_amount": "SUM(amount)"},
+            "priority": 10
+        },
+        "user_activity": {
+            "type": "fact",
+            "grain": ["user_id", "order_date_month"],
+            "dims": {"user_id": "user_id", "order_date_month": "DATE_TRUNC('month', activity_date)"},
+            "measures": {"login_count": "SUM(login_count)"},
+            "priority": 10
+        },
+        "monthly_order_by_user": {
+            "type": "preagg",
+            "grain": ["user_id", "order_date_month"],
+            "dims": {"user_id": "user_id", "order_date_month": "order_date_month"},
+            "measures": {"total_amount": "SUM(total_amount)"},
+            "priority": 1
+        },
+        "monthly_activity_by_user": {
+            "type": "preagg",
+            "grain": ["user_id", "order_date_month"],
+            "dims": {"user_id": "user_id", "order_date_month": "order_date_month"},
+            "measures": {"login_count": "SUM(login_count)"},
+            "priority": 1
+        },
+        # dimension table
+        "users_dim": {
+            "type": "dim",
+            "grain": ["user_id"],
+            "dims": {"user_id": "user_id", "manager_id": "manager_id"},
+            "measures": {},
+            "priority": 100
+        }
+    }
+}
+
+# ----------------------------
+# API request example
+# ----------------------------
+API_REQUEST = {
+    "dimensions": ["user_id", "order_date_month", "manager_id"],   # manager_id comes from users_dim
+    "measures": ["total_amount", "login_count"],
+    "filters": {
+        "order_date_month": {"gte": "2025-01-01", "lt": "2025-09-01"},
+        "total_amount": {"gte": 1000}
+    }
+}
+
+# ----------------------------
+# Logical plan node classes
+# ----------------------------
+class ScanAggregate:
+    """Represents a per-table aggregation subplan (becomes a CTE)."""
+    def __init__(self, table_name: str, dim_exprs: Dict[str, str], measure_exprs: Dict[str, str],
+                 where_clauses: List[str], group_by_exprs: List[str], having_clauses: List[str]):
+        self.table_name = table_name
+        self.dim_exprs = dim_exprs            # canonical_dim -> table expr
+        self.measure_exprs = measure_exprs    # canonical_measure -> table expr (agg)
+        self.where_clauses = where_clauses
+        self.group_by_exprs = group_by_exprs
+        self.having_clauses = having_clauses
+
+    def cte_name(self):
+        return f"{self.table_name.replace('.', '_')}_agg"
+
+    def to_sql(self) -> str:
+        select_parts = []
+        # select canonical dims aliased to canonical names
+        for canon_dim, expr in self.dim_exprs.items():
+            select_parts.append(f"{expr} AS {canon_dim}")
+        # select measures aliased
+        for canon_meas, expr in self.measure_exprs.items():
+            select_parts.append(f"{expr} AS {canon_meas}")
+        select_clause = ",\n    ".join(select_parts) or "1"
+        sql = f"SELECT\n    {select_clause}\nFROM {self.table_name}"
+        if self.where_clauses:
+            sql += "\nWHERE " + " AND ".join(self.where_clauses)
+        if self.group_by_exprs:
+            sql += "\nGROUP BY " + ", ".join(self.group_by_exprs)
+        if self.having_clauses:
+            sql += "\nHAVING " + " AND ".join(self.having_clauses)
+        return sql
+
+    def __repr__(self):
+        return f"<ScanAggregate table={self.table_name} dims={list(self.dim_exprs.keys())} measures={list(self.measure_exprs.keys())}>"
+
+class LogicalPlan:
+    """High-level logical plan: list of ScanAggregate nodes, plus joins to do final projection."""
+    def __init__(self):
+        self.scans: List[ScanAggregate] = []
+        self.join_dims: List[str] = []  # canonical dimensions to join on (e.g., user_id, order_date_month)
+        self.dim_lookups: List[Tuple[str,str]] = []  # (dim_table, join_key) e.g., ("users_dim","user_id")
+        self.final_select: List[str] = []  # final select expressions (aliases)
+    
+    def to_federated_sql(self) -> str:
+        # If single scan and no dim lookups -> emit a simple SELECT without CTE
+        if len(self.scans) == 1 and not self.dim_lookups:
+            scan = self.scans[0]
+            # reuse scan.to_sql but remove GROUP BY duplication in final (we want grouped result)
+            return scan.to_sql()
+        # Otherwise create CTEs and join them
+        ctes = []
+        for s in self.scans:
+            ctes.append(f"{s.cte_name()} AS (\n{textwrap.indent(s.to_sql(), '    ')}\n)")
+        # dimension CTEs (if any) are not aggregated, but we will reference them directly (no CTE)
+        final_select = ",\n    ".join(self.final_select)
+        # build FROM + joins
+        base = self.scans[0].cte_name()
+        joins_sql = ""
+        for s in self.scans[1:]:
+            conds = " AND ".join([f"{base}.{d} = {s.cte_name()}.{d}" for d in self.join_dims])
+            joins_sql += f"\nJOIN {s.cte_name()} ON {conds}"
+        # join dims (dimension tables) onto the combined fact join result
+        dim_joins = ""
+        for dim_table, join_key in self.dim_lookups:
+            dim_joins += f"\nJOIN {dim_table} ON {base}.{join_key} = {dim_table}.{join_key}"
+        final_sql = "WITH\n" + ",\n".join(ctes) + "\nSELECT\n    " + final_select + f"\nFROM {base}" + joins_sql + dim_joins
+        return final_sql
+
+    def __repr__(self):
+        return f"<LogicalPlan scans={self.scans} join_dims={self.join_dims} dim_lookups={self.dim_lookups}>"
+
+# ----------------------------
+# Planner functions
+# ----------------------------
+def find_tables_providing_dim(dim: str) -> List[str]:
+    return [tname for tname, meta in METADATA["tables"].items() if dim in meta["dims"]]
+
+def find_tables_providing_measure(meas: str) -> List[str]:
+    return [tname for tname, meta in METADATA["tables"].items() if meas in meta["measures"]]
+
+def choose_tables_for_request(req: Dict) -> Tuple[List[str], List[str]]:
+    """
+    Choose minimal set of tables to cover requested dimensions and measures.
+    Preference: lower priority value (more aggregated preaggs) first.
+    Returns (fact_tables_selected, dim_tables_needed)
+    """
+    requested_dims = set(req["dimensions"])
+    requested_measures = set(req["measures"])
+
+    # candidate tables sorted by priority
+    candidates = sorted(METADATA["tables"].items(), key=lambda kv: kv[1].get("priority", 100))
+    selected = []
+    dims_covered = set()
+    meas_covered = set()
+
+    for tname, meta in candidates:
+        table_dims = set(meta["dims"].keys())
+        table_meas = set(meta["measures"].keys())
+        add = False
+        if (table_dims & (requested_dims - dims_covered)) or (table_meas & (requested_measures - meas_covered)):
+            add = True
+        if add:
+            selected.append(tname)
+            dims_covered |= (table_dims & requested_dims)
+            meas_covered |= (table_meas & requested_measures)
+        if dims_covered == requested_dims and meas_covered == requested_measures:
+            break
+
+    # determine dimension tables needed for dims not provided by any selected fact/preagg
+    dim_tables_needed = []
+    for d in requested_dims:
+        provided = any(d in METADATA["tables"][t]["dims"] for t in selected)
+        if not provided:
+            # find a dim table that provides it (prefers type=dim)
+            for tname, meta in METADATA["tables"].items():
+                if meta["type"] == "dim" and d in meta["dims"]:
+                    dim_tables_needed.append((tname, d))
+                    break
+    return selected, dim_tables_needed
+
+def build_scan_aggregate(table_name: str, req: Dict) -> Optional[ScanAggregate]:
+    meta = METADATA["tables"][table_name]
+    # determine dims this table can provide (intersection with requested dims)
+    dims = {d: meta["dims"][d] for d in req["dimensions"] if d in meta["dims"]}
+    # determine measures this table can provide
+    measures = {m: meta["measures"][m] for m in req["measures"] if m in meta["measures"]}
+    if not dims and not measures:
+        return None  # this table doesn't contribute
+    # Build where clauses for dimension filters applicable to this table
+    where_clauses = []
+    for dim, conds in req.get("filters", {}).items():
+        if dim in meta["dims"]:
+            expr = meta["dims"][dim]
+            for op, val in conds.items():
+                # crude operator mapping, production system should sanitize/parametrize
+                sqlop = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<", "eq": "="}.get(op, "=")
+                where_clauses.append(f"{expr} {sqlop} '{val}'")
+    # Build having clauses for measure filters applicable to this table
+    having_clauses = []
+    for meas, conds in req.get("filters", {}).items():
+        if meas in meta["measures"]:
+            expr = meta["measures"][meas]
+            for op, val in conds.items():
+                sqlop = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<", "eq": "="}.get(op, "=")
+                having_clauses.append(f"{expr} {sqlop} {val}")
+    # group_by expressions should be the table-specific expressions for the canonical dims
+    group_by_exprs = [expr for expr in dims.values()]
+    return ScanAggregate(table_name=table_name, dim_exprs=dims, measure_exprs=measures,
+                         where_clauses=where_clauses, group_by_exprs=group_by_exprs, having_clauses=having_clauses)
+
+def build_logical_plan(req: Dict) -> LogicalPlan:
+    facts, dim_tables = choose_tables_for_request(req)
+    if not facts:
+        raise ValueError("No fact/preagg tables can satisfy the request.")
+
+    plan = LogicalPlan()
+    # create scan/aggregate nodes for each selected fact/preagg table
+    for f in facts:
+        node = build_scan_aggregate(f, req)
+        if node:
+            plan.scans.append(node)
+    # determine join dims (canonical dims present in at least two scans)
+    if plan.scans:
+        # choose intersection of requested dimensions that appear in scans
+        join_dims = [d for d in req["dimensions"] if sum(1 for s in plan.scans if d in s.dim_exprs) > 1]
+        plan.join_dims = join_dims
+    # add dimension lookups (many-to-one)
+    for dim_tab, join_key in dim_tables:
+        plan.dim_lookups.append((dim_tab, join_key))
+    # final select: canonical dims + measures (use aliases from CTEs)
+    # We will select dims from the first scan CTE, and measures from whichever CTE provides them
+    if plan.scans:
+        base_cte = plan.scans[0].cte_name()
+        # canonical dims
+        plan.final_select.extend([f"{base_cte}.{d}" for d in req["dimensions"]])
+        # measures: include measure columns from each scan if available
+        for s in plan.scans:
+            cte = s.cte_name()
+            for m in req["measures"]:
+                if m in s.measure_exprs:
+                    plan.final_select.append(f"{cte}.{m}")
+    return plan
+
+# ----------------------------
+# Run planner and generate SQL
+# ----------------------------
+plan = build_logical_plan(API_REQUEST)
+
+print("=== Logical Plan ===")
+pprint.pprint(plan)
+
+print("\n=== Federated SQL Execution Plan ===")
+sql = plan.to_federated_sql()
+print(sql)
+

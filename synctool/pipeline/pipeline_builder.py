@@ -43,8 +43,7 @@ class JobContext:
     """Context for the entire sync job - not tied to a specific partition or strategy"""
     job_name: str
     user_strategy_name: Optional[str] = None  # Strategy name requested by user
-    user_start: Any = None  # Start bounds requested by user
-    user_end: Any = None    # End bounds requested by user
+    user_bounds: Optional[Dict[str, Any]] = None  # Bounds requested by user
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -80,6 +79,7 @@ class PipelineBuilder:
                 stage = PartitionStage(
                     self.sync_engine,
                     stage_config,
+                    pipeline_config,
                     self.logger,
                     self.data_storage,
                     self.progress_manager
@@ -90,6 +90,7 @@ class PipelineBuilder:
                 stage = ChangeDetectionStage(
                     self.sync_engine,
                     stage_config,
+                    pipeline_config,
                     self.logger,
                     self.data_storage,
                     self.progress_manager
@@ -99,6 +100,7 @@ class PipelineBuilder:
                 stage = DataFetchStage(
                     self.sync_engine,
                     stage_config,
+                    pipeline_config,
                     self.logger,
                     self.data_storage,
                     self.progress_manager
@@ -108,6 +110,7 @@ class PipelineBuilder:
                 stage = TransformStage(
                     self.sync_engine,
                     stage_config,
+                    pipeline_config,
                     self.logger,
                     self.data_storage,
                     self.progress_manager
@@ -117,6 +120,7 @@ class PipelineBuilder:
                 stage = BatcherStage(
                     self.sync_engine,
                     stage_config,
+                    pipeline_config,
                     self.logger,
                     self.data_storage,
                     self.progress_manager
@@ -132,6 +136,7 @@ class PipelineBuilder:
                     stage = custom_class(
                         self.sync_engine,
                         stage_config,
+                        pipeline_config,
                         self.logger,
                         self.data_storage,
                         self.progress_manager
@@ -141,6 +146,7 @@ class PipelineBuilder:
                 stage = PopulateStage(
                     self.sync_engine,
                     stage_config,
+                    pipeline_config,
                     self.logger,
                     self.data_storage,
                     self.progress_manager
@@ -149,11 +155,10 @@ class PipelineBuilder:
         
         return pipeline
     
-    def create_job_context(self, user_strategy_name: Optional[str], user_start: Any, user_end: Any) -> JobContext:
+    def create_job_context(self, user_strategy_name: Optional[str], user_bounds: Optional[List[Dict[str, Any]]]) -> JobContext:
         """Create context for the entire job"""
         return JobContext(
             job_name=self.sync_engine.config.name,
             user_strategy_name=user_strategy_name,
-            user_start=user_start,
-            user_end=user_end
+            user_bounds={bound["column"]: bound for bound in user_bounds} if user_bounds else {}
         )

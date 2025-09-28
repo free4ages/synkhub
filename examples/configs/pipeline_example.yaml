@@ -23,16 +23,16 @@ column_map:
   - source: "id"
     dest: "user_id"
     roles: ["unique_column", "partition_column"]
-    dtype: "int"
+    data_type: "int"
   - source: "name"
     dest: "full_name"
-    dtype: "string"
+    data_type: "string"
   - source: "email"
     dest: "email_address"
-    dtype: "string"
+    data_type: "string"
   - source: "created_at"
     dest: "created_timestamp"
-    dtype: "timestamp"
+    data_type: "timestamp"
 
 strategies:
   - name: "full_pipeline"
@@ -117,7 +117,7 @@ enrichment:
       fields:
         - source: "department"
           dest: "user_department"
-          dtype: "string"
+          data_type: "string"
         - source: "role"
           dest: "user_role"
-          dtype: "string"
+          data_type: "string"

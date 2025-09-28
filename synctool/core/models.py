@@ -152,14 +152,19 @@ class FilterConfig:
 #     order_column: Optional[str] = None
 
 @dataclass
-class PartitionDimensionConfig:
+class DimensionPartitionConfig:
     """Single partition dimension configuration"""
     column: str
     step: int  # Can be numeric step or time period like 'daily', 'weekly'
     step_unit: str = ""
-    dtype: str = ""
+    data_type: str = ""
     start: Any = None
     end: Any = None
+    type: str = "range"  # values: range, upper_bound, lower_bound, value
+    value: List[Any] = field(default_factory=list)
+    lower_bound: Any = None
+    upper_bound: Any = None
+    bounded: bool = False
 
 @dataclass
 class StrategyConfig:
@@ -182,8 +187,9 @@ class StrategyConfig:
     # partition_step: Optional[int] = None
     
     # New multi-dimensional partitioning
-    primary_partitions: List[PartitionDimensionConfig] = field(default_factory=list)
-    secondary_partitions: List[PartitionDimensionConfig] = field(default_factory=list)
+    primary_partitions: List[DimensionPartitionConfig] = field(default_factory=list)
+    secondary_partitions: List[DimensionPartitionConfig] = field(default_factory=list)
+    delta_partitions: List[DimensionPartitionConfig] = field(default_factory=list)
     
     prevent_update_unless_changed: bool = True
     use_pagination: bool = False
@@ -199,7 +205,7 @@ class TransformationConfig:
     """Transformation configuration"""
     transform: Union[str, Callable]
     expr: str
-    dtype: Optional[str] = None
+    data_type: Optional[str] = None
     columns: Optional[List[str]] = field(default_factory=list)
 
 
@@ -209,7 +215,7 @@ class DimensionFieldConfig:
     source: str
     dest: str
     transform: Optional[str] = None
-    dtype: Optional[UniversalDataType] = None
+    data_type: Optional[UniversalDataType] = None
 
 
 @dataclass
@@ -291,7 +297,7 @@ class SyncProgress:
 class Column:
     expr: str # Source expression (e.g. "u.id")
     name: str                  # Destination column name
-    dtype: Optional[UniversalDataType] = None
+    data_type: Optional[UniversalDataType] = None
     hash_column: bool = True
     # data_column: bool = True
     unique_column: bool = False
@@ -303,9 +309,9 @@ class Column:
     virtual: bool = False
     
     def cast(self, value: Any) -> Any:
-        if not self.dtype:
+        if not self.data_type:
             return value
-        return cast_value(value, self.dtype)
+        return cast_value(value, self.data_type)
 
 @dataclass
 class BackendConfig:
@@ -363,6 +369,7 @@ class PipelineJobConfig:
     """Complete pipeline-based sync job configuration"""
     name: str
     description: str
+    sync_type: Optional[str] = 'row-level'
     hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
     backends: List[BackendConfig] = field(default_factory=list)
     columns: List[Column] = field(default_factory=list)
@@ -371,14 +378,14 @@ class PipelineJobConfig:
     max_concurrent_partitions: int = 1
     
 
-@dataclass
-class JobContext:
-    """Context for the entire sync job - not tied to a specific partition or strategy"""
-    job_name: str
-    user_strategy_name: Optional[str] = None  # Strategy name requested by user
-    user_start: Any = None  # Start bounds requested by user
-    user_end: Any = None    # End bounds requested by user
-    metadata: Dict[str, Any] = field(default_factory=dict)
+# @dataclass
+# class JobContext:
+#     """Context for the entire sync job - not tied to a specific partition or strategy"""
+#     job_name: str
+#     user_strategy_name: Optional[str] = None  # Strategy name requested by user
+#     user_start: Any = None  # Start bounds requested by user
+#     user_end: Any = None    # End bounds requested by user
+#     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 
@@ -431,32 +438,47 @@ class DimensionPartition:
     start: Any
     end: Any
     column: str
-    column_type: str
+    data_type: str
     step: int = 0
     step_unit: str = ""
     offset: int = 0
     partition_id: str = "0"
     level: int = 0
+    type: str = "range"
+    value: Any = None
+
+# @dataclass
+# class Partition:
+#     """Partition bounds for sync operations"""
+#     start: Any
+#     end: Any
+#     column: str
+#     data_type: str
+#     step: int = 0
+#     offset: int = 0
+#     partition_id: str = "0"
+#     level: int = 0
 
 @dataclass
-class Partition:
+class PartitionBound:
     """Partition bounds for sync operations"""
-    start: Any
-    end: Any
     column: str
-    column_type: str
-    step: int = 0
-    offset: int = 0
-    partition_id: str = "0"
-    level: int = 0
-
+    data_type: str
+    type: str = "range"
+    start: Any = None
+    end: Any = None
+    value: Any = None
+    lower_bound: Any = None
+    upper_bound: Any = None
+    bounded: bool = False
+    exclusive: bool = True
 
 
 @dataclass
-class MultiDimensionalPartition:
+class MultiDimensionPartition:
     """Multi-dimensional partition with multiple column bounds"""
     dimensions: List[DimensionPartition]
-    parent_partition: Optional['MultiDimensionalPartition'] = None
+    parent_partition: Optional['MultiDimensionPartition'] = None
     level: int = 0
     num_rows: int = 0
     hash: Union[str, int, None] = None
@@ -471,12 +493,19 @@ class MultiDimensionalPartition:
             id_parts.append(dimension.partition_id or "0")
         return '-'.join(id_parts) if id_parts else None
     
-    def get_bounds_for_column(self, column: str) -> Tuple[Any, Any]:
+    def _get_dimension_partition_bound(self, dimension: DimensionPartition) -> PartitionBound:
+        if dimension.type == "range":
+            return PartitionBound(column=dimension.column, start=dimension.start, end=dimension.end, data_type=dimension.data_type, type=dimension.type)
+        if dimension.type == "value":
+            return PartitionBound(column=dimension.column, value=dimension.value, data_type=dimension.data_type, type=dimension.type)
+            
+    
+    def get_bound_for_column(self, column: str) -> PartitionBound:
         """Get start/end bounds for a specific column"""
         for dimension in self.dimensions:
             if dimension.column == column:
-                return dimension.start, dimension.end
-        return None, None
+                return self._get_dimension_partition_bound(dimension)
+        return None
     
     def has_column(self, column: str) -> bool:
         """Check if partition has bounds for a specific column"""
@@ -485,18 +514,18 @@ class MultiDimensionalPartition:
                 return True
         return False
     
-    def get_sync_bounds(self) -> List[Tuple[Any, Any]]:
-        sync_bounds = []
+    def get_partition_bounds(self) -> List[PartitionBound]:
+        partition_bounds = []
         handled_columns = set()
         for dimension in self.dimensions:
-            sync_bounds.append({"column":dimension.column, "start":dimension.start, "end":dimension.end})
+            partition_bounds.append(self._get_dimension_partition_bound(dimension))
             handled_columns.add(dimension.column)
         if self.parent_partition:
             for dimension in self.parent_partition.dimensions:
                 if dimension.column not in handled_columns:
-                    sync_bounds.append({"column":dimension.column, "start":dimension.start, "end":dimension.end})
+                    partition_bounds.append(PartitionBound(column=dimension.column, start=dimension.start, end=dimension.end, data_type=dimension.data_type, type=dimension.type))
                     handled_columns.add(dimension.column)
-        return sync_bounds
+        return partition_bounds
     
 
 

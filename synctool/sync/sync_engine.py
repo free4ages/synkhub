@@ -69,7 +69,7 @@ class SyncEngine:
         
         # self.column_mapper = ColumnMapper(self.config.columns)
     
-    async def sync(self, strategy_name: Optional[str] = None, start: Any = None, end: Any = None,
+    async def sync(self, strategy_name: Optional[str] = None, bounds: Optional[List[Dict[str, Any]]] = None,
                    progress_callback: Optional[Callable[[SyncProgress], None]] = None) -> Dict[str, Any]:
         """Main sync method - simplified to just create and execute pipeline"""
         # import pdb;pdb.set_trace()
@@ -93,7 +93,7 @@ class SyncEngine:
             pipeline_builder = PipelineBuilder(self, self.logger, self.data_storage, progress_manager)
             
             # Create job context with user parameters
-            job_context = pipeline_builder.create_job_context(strategy_name, start, end)
+            job_context = pipeline_builder.create_job_context(strategy_name, bounds)
             
             # Build pipeline from stage configurations
             pipeline = pipeline_builder.build_pipeline_from_stages(self.config)

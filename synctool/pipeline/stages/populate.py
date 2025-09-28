@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 import traceback
 from ..base import PipelineStage, DataBatch, StageConfig
 from ...core.enums import SyncStrategy, DataStatus
-from ...core.models import DataStorage, BackendConfig, GlobalStageConfig, Column
+from ...core.models import DataStorage, BackendConfig, GlobalStageConfig, Column, PipelineJobConfig
 from ...core.column_mapper import ColumnSchema
 
 
@@ -22,9 +22,9 @@ class PopulateStageConfig(StageConfig):
 class PopulateStage(PipelineStage):
     """Stage that populates data into destination systems"""
     
-    def __init__(self, sync_engine: Any, config: GlobalStageConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
+    def __init__(self, sync_engine: Any, config: GlobalStageConfig, pipeline_config: PipelineJobConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
         config = PopulateStageConfig.from_global_stage_config(config)
-        super().__init__(config.name, config, logger)
+        super().__init__(config.name, config, pipeline_config, logger)
         self.sync_engine = sync_engine
         self.columns = config.columns
         self.column_schema = ColumnSchema(config.columns)

@@ -30,25 +30,25 @@ column_map:
     dest: 'user_id'
     unique_column: true
     order_column: true
-    dtype: 'integer'
+    data_type: 'integer'
     direction: 'asc'
   - name: 'first_name'
     src: 'u.first_name'
     dest: 'first_name'
     insert: false
-    dtype: 'varchar'
+    data_type: 'varchar'
   - name: 'created_at'
     src: 'u.created_at'
     dest: 'source_created_at'
-    dtype: 'datetime'
+    data_type: 'datetime'
   - name: 'updated_at'
     src: 'u.updated_at'
     dest: 'source_updated_at'
-    dtype: 'datetime'
+    data_type: 'datetime'
   - name: 'email'
     src: 'p.email'
     dest: 'email'
-    dtype: 'varchar'
+    data_type: 'varchar'
   - name: 'last_name'
     src: 'u.last_name'
     dest: 'last_name'
@@ -62,7 +62,7 @@ column_map:
   - name: 'checksum'
     src: null
     dest: 'checksum'
-    dtype: 'varchar'
+    data_type: 'varchar'
     hash_key: true
 
 partition_column: 'user_id'
@@ -113,4 +113,4 @@ enrichment:
         - last_name
       transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
       dest: 'name'
-      dtype: 'integer'
+      data_type: 'integer'

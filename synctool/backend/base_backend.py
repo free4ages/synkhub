@@ -11,7 +11,7 @@ import decimal
 import logging
 
 from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table, GroupHashMeta
-from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, MultiDimensionalPartition, Column, DataStorage
+from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, MultiDimensionPartition, Column, DataStorage
 from ..core.column_mapper import ColumnSchema  # Add this import
 from ..core.enums import HashAlgo, BackendType, Capability
 from ..core.decorators import async_retry
@@ -119,27 +119,27 @@ class BaseBackend(ABC):
         pass
 
     @abstractmethod
-    async def insert_partition_data(self, data: List[Dict], partition: Optional[MultiDimensionalPartition] = None, upsert: bool = False) -> int:
+    async def insert_partition_data(self, data: List[Dict], partition: Optional[MultiDimensionPartition] = None, upsert: bool = False) -> int:
         """Insert data into the provider"""
         pass
     
     @abstractmethod
-    async def insert_delta_data(self, data: List[Dict], partition: Optional[MultiDimensionalPartition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
+    async def insert_delta_data(self, data: List[Dict], partition: Optional[MultiDimensionPartition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
         """Insert data into the provider"""
         pass
 
     @abstractmethod
-    async def fetch_partition_data(self, partition: MultiDimensionalPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         pass
     
     @abstractmethod
-    async def fetch_delta_data(self, partition: Optional[MultiDimensionalPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         pass
 
     @abstractmethod
-    async def fetch_partition_row_hashes(self, partition: MultiDimensionalPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch partition row hashes from destination along with state columns"""
         pass
 
@@ -159,7 +159,7 @@ class BaseBackend(ABC):
         pass
 
     @abstractmethod
-    async def fetch_child_partition_hashes(self, partition: MultiDimensionalPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch child hashes for a partition"""
         pass
 
@@ -261,7 +261,7 @@ class SqlBackend(Backend):
     async def insert_partition_data(
         self,
         data: List[Dict],
-        partition: Optional[MultiDimensionalPartition] = None,
+        partition: Optional[MultiDimensionPartition] = None,
         column_keys: Optional[List[str]] = None,
         batch_size: int = 5000,
         upsert: bool = False
@@ -273,7 +273,7 @@ class SqlBackend(Backend):
     async def insert_delta_data(
         self,
         data: List[Dict],
-        partition: Optional[MultiDimensionalPartition] = None,
+        partition: Optional[MultiDimensionPartition] = None,
         column_keys: Optional[List[str]] = None,
         batch_size: int = 5000,
         upsert: bool = False
@@ -316,13 +316,13 @@ class SqlBackend(Backend):
         return SqlBuilder.build(query)
 
 
-    async def fetch_partition_data(self, partition: MultiDimensionalPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def fetch_delta_data(self, partition: Optional[MultiDimensionalPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         if partition is None:
             # Handle case where no partition is provided
@@ -339,7 +339,7 @@ class SqlBackend(Backend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def fetch_child_partition_hashes(self, partition: MultiDimensionalPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         return []
     
 
@@ -350,18 +350,23 @@ class SqlBackend(Backend):
             final.append(self.column_schema.transform_data(d))
         return final
     
-    def _build_partition_data_query(self, partition: MultiDimensionalPartition, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
+    def _build_partition_data_query(self, partition: MultiDimensionPartition, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
         filters = self._build_filter_query()
         # if not self.column_schema or not self.column_schema.partition_column:
         #     raise ValueError("No partition key configured in column schema")
 
-        sync_bounds = partition.get_sync_bounds()
-        for bound in sync_bounds:
-            column = self.db_column_schema.column(bound["column"])
-            filters.extend([     
-                Filter(column=column.expr, operator=">=", value=column.cast(bound["start"])),
-                Filter(column=column.expr, operator="<", value=column.cast(bound["end"]))
-            ])
+        partition_bounds = partition.get_partition_bounds()
+        for bound in partition_bounds:
+            column = self.db_column_schema.column(bound.column)
+            if bound.type == "range":
+                filters.extend([     
+                        Filter(column=column.expr, operator=">=", value=column.cast(bound.start)),
+                        Filter(column=column.expr, operator="<", value=column.cast(bound.end))
+                    ])
+            elif bound.type == "value":
+                filters.extend([
+                    Filter(column=column.expr, operator="in", value=[column.cast(x) for x in bound.value])
+                ])
         
         # Add pagination if specified
         limit = page_size if page_size is not None else None

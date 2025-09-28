@@ -41,8 +41,8 @@ class ConfigSerializer:
         }
         
         # Only include non-default values
-        if column.dtype is not None:
-            result['dtype'] = column.dtype.value if hasattr(column.dtype, 'value') else str(column.dtype)
+        if column.data_type is not None:
+            result['data_type'] = column.data_type.value if hasattr(column.data_type, 'value') else str(column.data_type)
         
         if not column.hash_column:
             result['hash_column'] = column.hash_column
@@ -140,8 +140,8 @@ class ConfigSerializer:
         
         if strategy.column:
             result['column'] = strategy.column
-        if strategy.column_type:
-            result['column_type'] = strategy.column_type
+        if strategy.data_type:
+            result['data_type'] = strategy.data_type
         if not strategy.use_sub_partition:
             result['use_sub_partition'] = strategy.use_sub_partition
         if strategy.sub_partition_step != 100:
@@ -179,8 +179,8 @@ class ConfigSerializer:
             'expr': transformation.expr,
         }
         
-        if transformation.dtype:
-            result['dtype'] = transformation.dtype
+        if transformation.data_type:
+            result['data_type'] = transformation.data_type
         if transformation.columns:
             result['columns'] = transformation.columns
         

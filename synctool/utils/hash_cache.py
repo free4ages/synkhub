@@ -102,16 +102,16 @@ class HashCache:
         end_offset = start_offset + intervals[level]
         
         # Convert offsets to actual values based on column type
-        column_type = partition.column_type
+        data_type = partition.data_type
         
-        if column_type in ("datetime", "timestamp"):
+        if data_type in ("datetime", "timestamp"):
             from datetime import datetime
             start_val = datetime.fromtimestamp(start_offset)
             end_val = datetime.fromtimestamp(end_offset)
-        elif column_type == "integer":
+        elif data_type == "integer":
             start_val = start_offset
             end_val = end_offset
-        elif column_type in ("uuid", "uuid_text", "uuid_text_dash"):
+        elif data_type in ("uuid", "uuid_text", "uuid_text_dash"):
             from ..utils.partition_generator import int_to_hex, END_HEX_INT
             import uuid
             
@@ -121,17 +121,17 @@ class HashCache:
             start_hex = int_to_hex(start_offset, pad_len=8) + "0" * 24
             end_hex = int_to_hex(end_offset, pad_len=8) + "0" * 24
             
-            if column_type == "uuid_text_dash":
+            if data_type == "uuid_text_dash":
                 start_val = str(uuid.UUID(start_hex))
                 end_val = str(uuid.UUID(end_hex))
-            elif column_type == "uuid_text":
+            elif data_type == "uuid_text":
                 start_val = start_hex
                 end_val = end_hex
-            elif column_type == "uuid":
+            elif data_type == "uuid":
                 start_val = uuid.UUID(start_hex)
                 end_val = uuid.UUID(end_hex)
         else:
-            raise ValueError(f"Unsupported column type: {column_type}")
+            raise ValueError(f"Unsupported column type: {data_type}")
             
         return start_val, end_val
     

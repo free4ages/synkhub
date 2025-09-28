@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, date
 from typing import Generator, Tuple, Union
+from dateutil.relativedelta import relativedelta
 
 
 epoch = datetime(1970, 1, 1)
@@ -65,20 +66,20 @@ def end_of_month(dt: datetime) -> datetime:
     month_start = start_of_month(dt)
     if dt == month_start:
         return dt
-    return month_start + timedelta(months=1)
+    return month_start + relativedelta(months=1)
 
 def end_of_quarter(dt: datetime) -> datetime:
     quarter_start = start_of_quarter(dt)
     if dt == quarter_start:
         return dt
-    return quarter_start + timedelta(quarters=1)
+    return quarter_start + relativedelta(months=3)
 
 
 def end_of_year(dt: datetime) -> datetime:
     year_start = start_of_year(dt)
     if dt == year_start:
         return dt
-    return year_start + timedelta(years=1)
+    return year_start + relativedelta(years=1)
 
 def add_months(dt: datetime, months: int) -> datetime:
     year = dt.year + (dt.month - 1 + months) // 12
@@ -182,6 +183,11 @@ def ceil_to_next_unit(dt: datetime, step: int, unit: str) -> datetime:
     if floored == dt:
         return dt
     return add_units(floored, 1, step, unit)
+
+def get_boundary(dt: datetime, step: int, unit: str) -> datetime:
+    start = align_to_boundary(dt, step, unit)
+    end = add_units(start, 1, step, unit)
+    return start, end
 
 def get_partition_id(dt: datetime, step: int, unit: str) -> int:
     if unit == "timestamp":

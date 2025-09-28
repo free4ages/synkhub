@@ -111,7 +111,7 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
       name: '',
       src: '',
       dest: '',
-      dtype: 'varchar',
+      data_type: 'varchar',
       unique_column: false,
       order_column: false,
       hash_key: false,
@@ -296,8 +296,8 @@ export const ConfigurationStep: React.FC<ConfigurationStepProps> = ({
                   Data Type
                 </label>
                 <select
-                  value={mapping.dtype || 'varchar'}
-                  onChange={(e) => handleColumnMappingChange(index, 'dtype', e.target.value)}
+                  value={mapping.data_type || 'varchar'}
+                  onChange={(e) => handleColumnMappingChange(index, 'data_type', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="varchar">VARCHAR</option>

@@ -356,7 +356,7 @@ class ClickHouseBackend(SqlBackend):
     def _build_partition_hash_query(self, partition: Partition, hash_algo: HashAlgo) -> Query:
         start = partition.start
         end = partition.end
-        partition_column_type = partition.column_type
+        partition_column_type = partition.data_type
 
         hash_column = self.column_schema.hash_key.expr if self.column_schema.hash_key else None
         partition_column = self.column_schema.partition_column.expr

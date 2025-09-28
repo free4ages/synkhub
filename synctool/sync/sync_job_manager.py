@@ -32,8 +32,7 @@ class SyncJobManager:
     
     async def run_sync_job(self, config: PipelineJobConfig, 
                           strategy_name: Optional[str] = None,
-                          start: Any = None, 
-                          end: Any = None,
+                          bounds: Optional[List[Dict[str, Any]]] = None,
                           progress_callback: Optional[Callable[[str, SyncProgress], None]] = None,
                           use_locking: bool = True) -> Dict[str, Any]:
         """Run a single sync job with resource management, locking, and metrics collection"""
@@ -52,15 +51,14 @@ class SyncJobManager:
                         'strategy': strategy_name
                     }
                 
-                return await self._execute_job(config, strategy_name, start, end, progress_callback)
+                return await self._execute_job(config, strategy_name, bounds, progress_callback)
         else:
             # Run without locking
-            return await self._execute_job(config, strategy_name, start, end, progress_callback)
+            return await self._execute_job(config, strategy_name, bounds, progress_callback)
     
     async def _execute_job(self, config: PipelineJobConfig, 
                           strategy_name: str,
-                          start: Any = None, 
-                          end: Any = None,
+                          bounds: Optional[List[Dict[str, Any]]] = None,
                           progress_callback: Optional[Callable[[str, SyncProgress], None]] = None) -> Dict[str, Any]:
         """Execute the actual sync job with metrics collection"""
         job_name = config.name
@@ -93,8 +91,7 @@ class SyncJobManager:
             # Run the sync job - metrics collection is now handled internally by SyncEngine
             result = await sync_engine.sync(
                 strategy_name=strategy_name,
-                start=start,
-                end=end,
+                bounds=bounds,
                 progress_callback=job_progress_callback
             )
             

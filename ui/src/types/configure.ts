@@ -42,7 +42,7 @@ export interface ColumnMapping {
   name: string;
   src?: string;           // Source expression (e.g., "u.id", "p.email")
   dest?: string;          // Destination column name
-  dtype?: string;         // Data type for the column
+  data_type?: string;         // Data type for the column
   unique_column: boolean;    // Used for identifying records during sync (upserts, conflict resolution)
   order_column: boolean;     // Used for sorting data during sync operations
   hash_key: boolean;      // Used for calculating row/block hashes for change detection
@@ -68,7 +68,7 @@ export interface EnrichmentTransformation {
   columns: string[];
   transform: string;
   dest: string;
-  dtype: string;
+  data_type: string;
 }
 
 export interface StrategyConfig {

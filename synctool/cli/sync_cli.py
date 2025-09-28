@@ -7,11 +7,12 @@ This CLI provides commands to run individual sync jobs without the scheduler.
 
 import asyncio
 import argparse
+import json
 import logging
 import traceback
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import yaml
 
 from ..config.config_loader import ConfigLoader
@@ -26,10 +27,65 @@ class SyncCLI:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+    
+    def _parse_bounds(self, bounds_str: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+        """Parse and validate bounds JSON string"""
+        if not bounds_str:
+            return None
+        
+        try:
+            bounds = json.loads(bounds_str)
+            
+            # Ensure bounds is a list
+            if not isinstance(bounds, list):
+                raise ValueError("Bounds must be a list of dictionaries")
+            
+            # Validate each bound entry
+            for i, bound in enumerate(bounds):
+                if not isinstance(bound, dict):
+                    raise ValueError(f"Bound entry {i} must be a dictionary")
+                
+                # Check required 'column' field
+                if 'column' not in bound:
+                    raise ValueError(f"Bound entry {i} must have a 'column' field")
+                
+                # Check that at least one of the valid keys is present
+                valid_keys = {'start', 'end', 'value', 'column'}
+                bound_keys = set(bound.keys())
+                
+                if not bound_keys.issubset(valid_keys):
+                    invalid_keys = bound_keys - valid_keys
+                    raise ValueError(f"Bound entry {i} contains invalid keys: {invalid_keys}. Valid keys are: {valid_keys}")
+                
+                # Check that we have either range bounds (start/end) or value bounds, not both
+                has_range = 'start' in bound or 'end' in bound
+                has_value = 'value' in bound
+                
+                if has_range and has_value:
+                    raise ValueError(f"Bound entry {i} cannot have both range bounds (start/end) and value bounds (value)")
+                
+                if not has_range and not has_value:
+                    raise ValueError(f"Bound entry {i} must have either range bounds (start/end) or value bounds (value)")
+            
+            self.logger.info(f"Successfully parsed {len(bounds)} bound entries")
+            return bounds
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in bounds parameter: {e}")
+        except Exception as e:
+            raise ValueError(f"Error parsing bounds: {e}")
         
     async def run_job(self, args):
         """Run a specific job manually"""
         self.logger.info(f"Starting sync job: {args.job_name}")
+        
+        # Parse bounds if provided
+        bounds = None
+        try:
+            bounds = self._parse_bounds(getattr(args, 'bounds', None))
+        except ValueError as e:
+            self.logger.error(f"Invalid bounds parameter: {e}")
+            sys.exit(1)
         
         # Load configuration using ConfigManager if available, otherwise fall back to file loading
         job_config = None
@@ -86,6 +142,7 @@ class SyncCLI:
             result = await job_manager.run_sync_job(
                 config=job_config,
                 strategy_name=args.strategy,
+                bounds=bounds,
                 progress_callback=progress_callback,
                 use_locking=False  # Disable locking for manual CLI runs
             )
@@ -340,6 +397,12 @@ Examples:
   # Run a job with specific strategy
   python -m synctool.cli.sync_cli run --job-name my_job --strategy delta --config-dir ./configs
 
+  # Run a job with bounds filtering (date range)
+  python -m synctool.cli.sync_cli run --job-name my_job --bounds '[{"column":"order_date","start":"2025-01-01","end":"2025-06-01"}]' --config-dir ./configs
+
+  # Run a job with multiple bounds (range and value)
+  python -m synctool.cli.sync_cli run --job-name my_job --bounds '[{"column":"order_date","start":"2025-01-01","end":"2025-06-01"},{"column":"category_id","value":[1,2,3]}]' --config-dir ./configs
+
   # List all available jobs
   python -m synctool.cli.sync_cli list --config-dir ./configs
 
@@ -359,6 +422,7 @@ Examples:
     run_parser = subparsers.add_parser('run', help='Run a specific sync job')
     run_parser.add_argument('--job-name', required=True, help='Name of the job to run')
     run_parser.add_argument('--strategy', help='Strategy to use (optional)')
+    run_parser.add_argument('--bounds', help='JSON string with bounds data. Format: [{"column":"col1","start":"val1","end":"val2"}, {"column":"col2","value":[1,2,3]}]')
     run_parser.add_argument('--config-dir', help='Directory containing job configs (for file-based loading)')
     run_parser.add_argument('--config-store-type', choices=['file', 'manager'], default='file',
                            help='Type of configuration store to use')

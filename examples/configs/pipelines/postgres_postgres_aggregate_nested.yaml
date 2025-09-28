@@ -1,5 +1,6 @@
 name: 'postgres_postgres_small_aggregate'
 description: 'Pipeline sync for aggregation'
+sync_type: 'aggregate'   # aggregate or row-level
 
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
@@ -12,10 +13,18 @@ strategies:
     default: true
     primary_partitions:
       - column: 'updated_at'
-        step: '7200'  # 2 hours
-    secondary_partitions:
-      - column: 'updated_at'
-        step: '1800'  # 30 minutes
+        step: 10
+        step_unit: 'day'
+        bounded: true
+    delta_partitions:
+      - column: 'user_id'
+        type: 'value'
+        step: -1
+        data_type: 'integer'
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+        data_type: 'datetime'
     max_concurrent_partitions: 1
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
@@ -32,18 +41,18 @@ strategies:
       - column: 'order_date'
         step: 1
         step_unit: 'month'
-        dtype: 'datetime'
+        data_type: 'datetime'
       - column: 'user_id'
         step: 50
-        dtype: 'integer'
+        data_type: 'integer'
     secondary_partitions:
       - column: 'order_date'
         step: 1
         step_unit: 'day'
-        dtype: 'datetime'
+        data_type: 'datetime'
       - column: 'user_id'
         step: 5
-        dtype: 'integer'
+        data_type: 'integer'
     max_concurrent_partitions: 1
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
@@ -60,18 +69,19 @@ strategies:
       - column: 'order_date'
         step: 1
         step_unit: 'month'
-        dtype: 'datetime'
+        data_type: 'datetime'
+        # end: '2025-09-01'
       - column: 'user_id'
         step: 50
-        dtype: 'integer'
+        data_type: 'integer'
     secondary_partitions:
       - column: 'order_date'
         step: 10
         step_unit: 'day'
-        dtype: 'datetime'
+        data_type: 'datetime'
       - column: 'user_id'
         step: 5
-        dtype: 'integer'
+        data_type: 'integer'
     max_concurrent_partitions: 1
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
@@ -93,13 +103,15 @@ backends:
     filters: []
     columns:
       - name: 'user_id'
-        dtype: 'integer'
+        data_type: 'integer'
       - name: 'amount'
-        dtype: 'decimal'
+        data_type: 'decimal'
       - name: 'discount'
-        dtype: 'decimal'
+        data_type: 'decimal'
       - name: 'order_date'
-        dtype: 'datetime'
+        data_type: 'datetime'
+      - name: 'updated_at'
+        data_type: 'datetime'
 
   - name: 'destination_backend'
     type: 'postgres'
@@ -108,25 +120,25 @@ backends:
     schema: 'public_copy'
     columns:
       - name: 'user_id'
-        dtype: 'integer'
+        data_type: 'integer'
         unique_column: true
-      - name: 'last_order_date'
-        dtype: 'datetime'
+      - name: 'last_updated_at'
+        data_type: 'datetime'
       - name: 'date'
-        dtype: 'date'
+        data_type: 'date'
         unique_column: true
       - name: 'amount'
-        dtype: 'decimal'
+        data_type: 'decimal'
       - name: 'discount'
-        dtype: 'decimal'
+        data_type: 'decimal'
       - name: 'num_orders'
-        dtype: 'integer'
+        data_type: 'integer'
       - name: 'checksum_int'
-        dtype: 'integer'
+        data_type: 'integer'
         hash_key: true
       - name: 'order_date'
-        expr: 'last_order_date'
-        dtype: 'datetime'
+        expr: 'date'
+        data_type: 'date'
         virtual: true
 
 
@@ -136,15 +148,14 @@ stages:
     enabled: true
     source:
       name: source_backend
-      columns:
-        - name: 'user_id'
-        - name: 'order_date'
+      # columns:
+      #   - name: 'user_id'
+      #   - name: 'order_date'
     destination:
       name: destination_backend
-      columns:
-        - name: 'user_id'
-        - name: 'order_date'
-          expr: 'last_order_date'
+      # columns:
+      #   - name: 'user_id'
+      #   - name: 'order_date'
   - name: 'change_detection'
     type: 'change_detection'
     enabled: true
@@ -152,15 +163,15 @@ stages:
       name: source_backend
     destination:
       name: destination_backend
-  - name: 'hash_fetch'
+  - name: 'data_fetch'
     type: 'data_fetch'
     enabled: true
     source:
       name: source_backend
       columns:
         - name: 'user_id'
-        - name: 'last_order_date'
-          expr: 'max(order_date)'
+        - name: 'last_updated_at'
+          expr: 'max(updated_at)'
         - name: 'num_orders'
           expr: 'count(1)'
         - name: 'amount'
@@ -178,9 +189,9 @@ stages:
         - name: 'discount'
         - name: 'date'
         - name: 'checksum_int'
-        - name: 'last_order_date'
+        - name: 'last_updated_at'
         - name: 'num_orders'
-  - name: 'hash_batcher'
+  - name: 'data_batcher'
     type: 'batcher'
     enabled: true
     config:
@@ -194,12 +205,12 @@ stages:
   #         - last_name
   #       transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
   #       expr: 'name'
-  #       dtype: 'varchar'
+  #       data_type: 'varchar'
   #     - columns:
   #         - uid
   #       transform: 'lambda x: str(x["uid"])'
   #       expr: 'uid'
-  #       dtype: 'uuid_text_dash'
+  #       data_type: 'uuid_text_dash'
   - name: 'populate'
     type: 'populate'
     enabled: true
@@ -223,5 +234,5 @@ stages:
   #           - last_name
   #         transform: 'lambda x: x["last_name"].upper()'
   #         dest: 'last_name'
-  #         dtype: 'varchar'
+  #         data_type: 'varchar'
 

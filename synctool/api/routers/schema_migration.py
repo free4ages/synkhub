@@ -24,7 +24,7 @@ class ColumnMapping(BaseModel):
     name: str
     src: Optional[str] = None
     dest: Optional[str] = None
-    dtype: Optional[str] = None
+    data_type: Optional[str] = None
     unique_column: bool = False  # For sync operations, not database constraints
     order_column: bool = False
     hash_key: bool = False
@@ -204,7 +204,7 @@ def _generate_suggested_config(universal_schema, source_connection: DatabaseConn
             'name': col.name,
             'src': col.name,  # Default to same name
             'dest': col.name,
-            'dtype': col.data_type.value,
+            'data_type': col.data_type.value,
             'unique_column': col.primary_key,  # Suggest primary keys as unique keys for sync
             'order_column': col.primary_key,   # Suggest primary keys as order keys
             'hash_key': False,  # Default to false
@@ -218,7 +218,7 @@ def _generate_suggested_config(universal_schema, source_connection: DatabaseConn
         'name': 'checksum',
         'src': None,  # Computed column
         'dest': 'checksum',
-        'dtype': 'varchar',
+        'data_type': 'varchar',
         'unique_column': False,
         'order_column': False,
         'hash_key': True,  # This is the hash key for change detection
@@ -271,7 +271,7 @@ def _config_to_universal_schema(config: MigrationConfig):
     for col_mapping in config.column_map:
         column = UniversalColumn(
             name=col_mapping.dest or col_mapping.name,
-            data_type=UniversalDataType(col_mapping.dtype) if col_mapping.dtype else UniversalDataType.TEXT,
+            data_type=UniversalDataType(col_mapping.data_type) if col_mapping.data_type else UniversalDataType.TEXT,
             nullable=True,
             primary_key=col_mapping.unique_column,  # For sync operations
             unique=col_mapping.unique_column,

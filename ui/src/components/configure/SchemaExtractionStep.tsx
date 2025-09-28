@@ -299,7 +299,7 @@ export const SchemaExtractionStep: React.FC<SchemaExtractionStepProps> = ({
                             {mapping.dest}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {mapping.dtype || 'varchar'}
+                            {mapping.data_type || 'varchar'}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             <div className="flex flex-wrap gap-1">

@@ -1,7 +1,7 @@
 import asyncio
 from typing import AsyncIterator, List, Dict, Any, TYPE_CHECKING, Optional
 from ..base import PipelineStage, DataBatch
-from ...core.models import GlobalStageConfig, DataStorage
+from ...core.models import GlobalStageConfig, DataStorage, PipelineJobConfig
 from ...core.enums import DataStatus
 
 if TYPE_CHECKING:
@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 
 class BatcherStage(PipelineStage[DataBatch, DataBatch]):
     """Stage that re-batches data to optimize downstream processing"""
-    def __init__(self, sync_engine: 'SyncEngine', config: GlobalStageConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
-        super().__init__(config.name, config, logger)
+    def __init__(self, sync_engine: 'SyncEngine', config: GlobalStageConfig, pipeline_config: PipelineJobConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
+        super().__init__(config.name, config, pipeline_config, logger)
         self.target_batch_size = self.config.config.get('target_batch_size', 1000)
         # self.max_wait_time_ms = self.config.get('max_wait_time_ms', 5000)
         self.preserve_batch_metadata = self.config.config.get('preserve_batch_metadata', False)

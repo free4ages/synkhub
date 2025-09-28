@@ -1,7 +1,7 @@
 from typing import AsyncIterator, Dict, Any, List, Callable, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 from ..base import  DataBatch, StageConfig
-from ...core.models import DataStorage, TransformationConfig, GlobalStageConfig
+from ...core.models import DataStorage, TransformationConfig, GlobalStageConfig, PipelineJobConfig
 from ...core.schema_models import UniversalDataType
 from ...utils import safe_eval
 from ..base import PipelineStage
@@ -17,10 +17,10 @@ class TransformStageConfig(StageConfig):
 class TransformStage(PipelineStage):
     """Stage that applies data transformations"""
     
-    def __init__(self, sync_engine: 'SyncEngine', config: GlobalStageConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
+    def __init__(self, sync_engine: 'SyncEngine', config: GlobalStageConfig, pipeline_config: PipelineJobConfig, logger=None, data_storage: Optional[DataStorage] = None, progress_manager: Optional['ProgressManager'] = None):
         # stage_config = ChangeDetectionConfig(**config)
         config = TransformStageConfig.from_global_stage_config(config)
-        super().__init__(config.name, config, logger)
+        super().__init__(config.name, config, pipeline_config, logger)
         self.transformations = self._build_transformations(config.transformations)
         self.progress_manager = progress_manager
     

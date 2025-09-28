@@ -410,7 +410,7 @@ class StarRocksMySQLBackend(SqlBackend):
         
         unique_columns = [col.name for col in self.column_schema.unique_columns] if self.column_schema.unique_columns else []
         partition_column = self.column_schema.partition_column.name if self.column_schema.partition_column else ""
-        partition_column_type = str(self.column_schema.partition_column.dtype) if self.column_schema.partition_column else ""
+        partition_column_type = str(self.column_schema.partition_column.data_typetype) if self.column_schema.partition_column else ""
         
         # This would need intervals from the partition context - for now return empty
         # In practice, this would be called with proper context from partition processor
@@ -532,7 +532,7 @@ class StarRocksMySQLBackend(SqlBackend):
         start = partition.start
         end = partition.end
         partition_column: Column = self.column_schema.column(partition.column)
-        partition_column_type: UniversalDataType | None = partition_column.dtype
+        partition_column_type: UniversalDataType | None = partition_column.data_type
 
         hash_column: Column | None = self.column_schema.hash_key
         order_columns: list[tuple[Column, str]] | None = self.column_schema.order_columns

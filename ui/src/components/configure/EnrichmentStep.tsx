@@ -20,7 +20,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
     columns: [],
     transform: '',
     dest: '',
-    dtype: 'varchar'
+    data_type: 'varchar'
   });
 
   // Auto-populate hash_key transformation if not already present
@@ -31,7 +31,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
         columns: ['hash__'],
         transform: 'lambda x: x["hash__"]',
         dest: 'checksum',
-        dtype: 'varchar'
+        data_type: 'varchar'
       };
       
       const updatedTransformations = [...transformations, hashKeyTransformation];
@@ -42,7 +42,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
         name: 'checksum',
         src: undefined, // Enrichment columns have undefined source
         dest: 'checksum',
-        dtype: 'varchar',
+        data_type: 'varchar',
         unique_column: false,
         order_column: false,
         hash_key: true, // This is the hash key
@@ -63,7 +63,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
         name: newTransformation.dest,
         src: undefined, // Enrichment columns have undefined source
         dest: newTransformation.dest,
-        dtype: newTransformation.dtype,
+        data_type: newTransformation.data_type,
         unique_column: false,
         order_column: false,
         hash_key: false,
@@ -78,7 +78,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
         columns: [],
         transform: '',
         dest: '',
-        dtype: 'varchar'
+        data_type: 'varchar'
       });
       setIsAdding(false);
     }
@@ -151,7 +151,7 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
                 
                 <div>
                   <span className="font-medium">Data Type:</span>
-                  <div className="mt-1 text-gray-700">{transformation.dtype}</div>
+                  <div className="mt-1 text-gray-700">{transformation.data_type}</div>
                 </div>
               </div>
             </div>
@@ -229,10 +229,10 @@ export const EnrichmentStep: React.FC<EnrichmentStepProps> = ({
                     Data Type
                   </label>
                   <select
-                    value={newTransformation.dtype}
+                    value={newTransformation.data_type}
                     onChange={(e) => setNewTransformation({
                       ...newTransformation,
-                      dtype: e.target.value
+                      data_type: e.target.value
                     })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
