@@ -51,7 +51,7 @@ class PopulateStage(PipelineStage):
         complete_partition = metadata.get("complete_partition")
         # strategy = metadata.get("strategy_type")
         self.logger.info(f"Populating batch {batch.batch_id}: {change_type} with {len(batch.data)} rows")
-        
+        # import pdb; pdb.set_trace()
         try:
             rows_processed = 0
             rows_inserted = 0

@@ -371,7 +371,7 @@ class PartitionStage(PipelineStage):
     def _generate_job_partitions(self, partition_dimensions: List[DimensionPartitionConfig], partition_bounds: List[PartitionBound]) -> Generator[Any, None, None]:
         """Generate all partitions for the job - supports both legacy and multi-dimensional partitioning"""
         # generator = MultiDimensionalPartitionGenerator(partition_dimensions)
-        
+        # import pdb; pdb.set_trace()
         # Generate multi-dimensional partitions
         yield from generate_multi_dimension_partitions_from_partition_bounds(partition_bounds, partition_dimensions)
         # return await self._generate_multi_dimensional_partitions(strategy_config, partition_bounds)

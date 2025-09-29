@@ -12,17 +12,24 @@ strategies:
     default: true
     primary_partitions:
       - column: 'updated_at'
-        step: 7200 # 2 hours
+        step: 2 # 2 hours
+        step_unit: 'hour'
         data_type: 'datetime'
-    secondary_partitions:
-      - column: 'updated_at'
-        step: 1800 # 30 minutes
-        data_type: 'datetime'
-    max_concurrent_partitions: 1
+    # secondary_partitions:
+    #   - column: 'updated_at'
+    #     step: 30 # 30 minutes
+    #     step_unit: 'minute'
+    #     data_type: 'datetime'
+    delta_partitions:
+      - column: 'user_id'
+        type: 'value'
+        step: -1
+        data_type: 'integer'
+    max_concurrent_partitions: 5
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
-    use_pagination: true
+    # use_pagination: true
   
   # Hash sync every 2 hours
   - name: 'hash'
@@ -81,6 +88,8 @@ backends:
         data_type: 'decimal'
       - name: 'discount'
         data_type: 'decimal'
+      - name: 'updated_at'
+        data_type: 'datetime'
 
   - name: 'destination_backend'
     type: 'postgres'
@@ -100,6 +109,12 @@ backends:
       - name: 'checksum_int'
         data_type: 'integer'
         hash_key: true
+      - name: 'last_updated_at'
+        data_type: 'datetime'
+      - name: 'updated_at'
+        expr: 'last_updated_at'
+        data_type: 'datetime'
+        virtual: true
 
 stages:
   - name: 'partition_generator'
@@ -129,6 +144,8 @@ stages:
           expr: 'sum(amount)'
         - name: 'discount'
           expr: 'sum(discount)'
+        - name: 'last_updated_at'
+          expr: 'max(updated_at)'
       group_by: ['user_id']
     destination:
       name: destination_backend

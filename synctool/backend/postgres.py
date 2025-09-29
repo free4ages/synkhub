@@ -622,6 +622,7 @@ class PostgresBackend(SqlBackend):
         """Efficiently upserts data into PostgreSQL using asyncpg with fallback error handling."""
         data = data_batch.data
         data = self._process_pre_insert_data(data)
+        # import pdb; pdb.set_trace()
         if not data:
             return 0
 

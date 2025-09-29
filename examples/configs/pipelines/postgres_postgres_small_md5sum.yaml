@@ -12,15 +12,19 @@ strategies:
     default: true
     primary_partitions:
       - column: 'updated_at'
-        step: 7200 # 2 hours
+        step: 2 # 2 hours
+        step_unit: 'hour'
+        data_type: 'datetime'
     secondary_partitions:
       - column: 'updated_at'
-        step: 1800 # 30 minutes
+        step: 30 # 30 minutes
+        step_unit: 'minute'
+        data_type: 'datetime'
     max_concurrent_partitions: 1
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
-    use_pagination: true
+    # use_pagination: true
     # use_sub_partition: false
   
   # Hash sync every 2 hours
