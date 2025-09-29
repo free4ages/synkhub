@@ -19,6 +19,7 @@ class StageConfig:
     name: str = ""
     type: str = ""
     enabled: bool = True
+    applicable_on: Any= None
 
     @classmethod
     def from_global_stage_config(cls, global_stage_config: GlobalStageConfig) -> 'StageConfig':
@@ -73,6 +74,13 @@ class PipelineStage(ABC, Generic[T, U]):
         self.logger = logger or logging.getLogger(f"{__name__}.{name}")
         self.enabled = self.config.enabled
         self.stage_id = str(uuid.uuid4())
+        # Track whether stage has been activated for current execution
+        self._is_active = True
+    
+    @property
+    def is_active(self) -> bool:
+        """Check if the stage is currently active"""
+        return self.enabled and self._is_active
     
     @abstractmethod
     def process(self, input_stream: AsyncIterator[T]) -> AsyncIterator[U]:
@@ -86,10 +94,59 @@ class PipelineStage(ABC, Generic[T, U]):
     async def teardown(self, context: Any) -> None:
         """Cleanup after processing (optional override)"""
         pass
+
     
-    def should_process(self, context: Any) -> bool:
+    def should_process(self, context: Any, strategy_config: Optional[StrategyConfig] = None) -> bool:
         """Determine if this stage should process the given context"""
+        # If stage is already disabled, don't process
+        if not self.enabled:
+            return False
+        
+        # # If stage was previously activated and deactivated, only check enabled state
+        # if hasattr(self, '_is_active') and self._is_active is False and hasattr(self, '_was_activated'):
+        #     return self.enabled
+        
+        # Check strategy-based filtering using applicable_on field
+        if strategy_config and self.config.applicable_on:
+            # applicable_on can contain strategy types or names to match
+            applicable_strategies = self.config.applicable_on
+            
+            # Handle different formats of applicable_on
+            if isinstance(applicable_strategies, str):
+                applicable_strategies = [applicable_strategies]
+            elif isinstance(applicable_strategies, dict):
+                # Support dict format: {"types": [...], "names": [...]}
+                strategy_types = applicable_strategies.get("types", [])
+                strategy_names = applicable_strategies.get("names", [])
+                applicable_strategies = strategy_types + strategy_names
+            elif not isinstance(applicable_strategies, list):
+                # If not a recognized format, treat as enabled
+                applicable_strategies = []
+            
+            if applicable_strategies:
+                # Check if current strategy matches any of the applicable strategies
+                strategy_type_str = strategy_config.type.value if hasattr(strategy_config.type, 'value') else str(strategy_config.type)
+                strategy_name = strategy_config.name
+                
+                # Match either by strategy type or name
+                matches = (strategy_type_str in applicable_strategies or 
+                          strategy_name in applicable_strategies)
+                
+                if matches:
+                    # Activate the stage for this execution
+                    self._is_active = True
+                    # self._was_activated = True
+                    return True
+                else:
+                    # Deactivate the stage
+                    self._is_active = False
+                    return False
+        
+        # If no strategy filtering is configured, use default enabled state
         return self.enabled
+    
+    # def should_apply(self, context: Any, strategy_config: StrategyConfig) -> bool:
+    #     pass
 
 
 # class BatchProcessor(PipelineStage[DataBatch, DataBatch]):
@@ -208,15 +265,18 @@ class Pipeline:
         self.stats.start_time = datetime.now()
         
         try:
-            # Setup all stages
+            # import pdb; pdb.set_trace()
+            partition_stage = self._get_partition_stage()
+            if partition_stage:
+                await partition_stage.setup(context)
+                strategy, strategy_config = await partition_stage.determine_strategy_for_context(context)
+            # Setup all stages - filter based on strategy config
             for stage in self.stages:
-                if stage.should_process(context):
+                if stage.should_process(context, strategy_config):
                     await stage.setup(context)
             
             # Check if we should use concurrent partition processing
-            partition_stage = self._get_partition_stage()
-            if partition_stage:
-                strategy, strategy_config = await partition_stage.determine_strategy_for_context(context)
+            if strategy_config:
                 max_concurrent_partitions = strategy_config.max_concurrent_partitions if strategy_config else 1
                 if max_concurrent_partitions > 1:
                     await self._execute_with_concurrent_partitions(context, partition_stage, max_concurrent_partitions)
@@ -233,9 +293,10 @@ class Pipeline:
             self.logger.error(f"Pipeline failed: {e}")
             raise
         finally:
-            # Teardown all stages
+            # Teardown all stages - only teardown stages that were activated
             for stage in reversed(self.stages):
-                if stage.should_process(context):
+                # Only teardown stages that are currently active or enabled
+                if stage.is_active:
                     try:
                         await stage.teardown(context)
                     except Exception as e:
@@ -265,7 +326,8 @@ class Pipeline:
                     current_stream = self._create_single_batch_stream(batch)
                     
                     for stage in self.stages[1:]:  # Skip partition_stage (index 0)
-                        if stage.should_process(batch.context):
+                        # if stage.should_process(batch.context, batch.context.strategy_config if hasattr(batch.context, 'strategy_config') else None):
+                        if stage.is_active:
                             current_stream = stage.process(current_stream)
                     
                     # Consume the stream to drive processing
@@ -291,7 +353,7 @@ class Pipeline:
         
         # Chain stages together
         for stage in self.stages:
-            if stage.should_process(context):
+            if stage.is_active:
                 self.logger.info(f"Executing stage: {stage.name}")
                 current_stream = stage.process(current_stream)
         

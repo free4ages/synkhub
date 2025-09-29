@@ -101,35 +101,31 @@ class PostgresBackend(SqlBackend):
         return 'public'
     
     async def connect(self):
-        """Connect to PostgreSQL database"""
-        # import pdb; pdb.set_trace()
-        database_name = self.connection_config.database or self.connection_config.dbname
-        self.logger.info(f"Connecting to PostgreSQL: host={self.connection_config.host}, port={self.connection_config.port}, user={self.connection_config.user}, database={database_name}")
-        self._connection = await asyncpg.create_pool(
-            host=self.connection_config.host,
-            port=self.connection_config.port,
-            user=self.connection_config.user,
-            password=self.connection_config.password,
-            database=database_name
-        )
+        """Connect to PostgreSQL database via DataStore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        await self._datastore.connect(self.logger)
 
     
     async def disconnect(self):
-        """Disconnect from PostgreSQL database"""
-        if self._connection:
-            await self._connection.close()
+        """Disconnect from PostgreSQL database via DataStore"""
+        if self._datastore:
+            await self._datastore.disconnect(self.logger)
     
     async def execute_query(self, query: str, params: Optional[list] = None, action: Optional[str] = 'select') -> List[Dict]:
         """Execute query and return DataFrame"""
-        self.logger.info(f"Executing query: {query} with params: {params}")
-        # print(query)
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        
+        # self.logger.info(f"Executing query: {query} with params: {params}")
+        
+        result = await self._datastore.execute_query(query, params, action)
+        
+        # Handle different return types based on action
         if action == 'select':
-            rows = await self._connection.fetch(query, *(params if params else []))
-            return [dict(row) for row in rows]
-        elif action == 'delete':
-            return await self._connection.execute(query, *(params if params else []))
+            return result  # Already a list of dictionaries
         else:
-            raise ValueError(f"Invalid action: {action}")
+            return result  # Number of affected rows
 
     
     async def has_data(self) -> bool:
@@ -657,7 +653,9 @@ class PostgresBackend(SqlBackend):
         safe_batch_size = min(len(data), max_safe_rows)
 
         success, failed = 0, 0
-        async with self._connection.acquire() as conn:
+        connection_pool = await self._datastore.get_connection_pool()
+        # import pdb; pdb.set_trace()
+        async with connection_pool.acquire() as conn:
             for i in range(0, len(data), safe_batch_size):
                 batch = data[i:i + safe_batch_size]
 

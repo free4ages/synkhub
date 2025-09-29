@@ -25,7 +25,7 @@ strategies:
         type: 'value'
         step: -1
         data_type: 'integer'
-    max_concurrent_partitions: 5
+    max_concurrent_partitions: 1
     enabled: true
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 10
@@ -154,6 +154,12 @@ stages:
     enabled: true
     config:
       target_batch_size: 10
+  - name: 'dedup'
+    type: 'dedup'
+    enabled: true
+    applicable_on: 'delta'
+    config:
+      dedup_keys: ['user_id']
   # - name: 'transformation'
   #   type: 'transform'
   #   enabled: true

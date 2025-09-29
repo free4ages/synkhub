@@ -202,9 +202,9 @@ class SyncEngine:
         elif backend_type == 'starrocks':
             from ..backend.starrocks import StarRocksBackend
             return StarRocksBackend
-        elif backend_type == 'starrocks_mysql':
-            from ..backend.starrocks_mysql import StarRocksMySQLBackend
-            return StarRocksMySQLBackend
+        # elif backend_type == 'starrocks_mysql':
+        #     from ..backend.starrocks_mysql import StarRocksMySQLBackend
+        #     return StarRocksMySQLBackend
         else:
             raise ValueError(f"Unsupported backend type: {backend_type}")
     

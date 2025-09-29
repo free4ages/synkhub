@@ -264,16 +264,16 @@ class PartitionStage(PipelineStage):
         destination_backend = self.destination_backend
         strategy_config = next((s for s in self.strategies if s.name == strategy_name), None)
       
-        # if not await destination_backend.has_data():
-        #     # Find full strategy
-        #     if strategy_config.type == SyncStrategy.FULL:
-        #         return SyncStrategy.FULL, strategy_config
-        #     else:
-        #         full_strategy = next((s for s in self.strategies if s.type == SyncStrategy.FULL and s.default), None)
-        #         return SyncStrategy.FULL, full_strategy
-        # elif strategy_config.type == SyncStrategy.FULL:
-        #     hash_strategy = next((s for s in self.strategies if s.type == SyncStrategy.HASH and s.default), None)
-        #     return SyncStrategy.HASH, hash_strategy
+        if not await destination_backend.has_data():
+            # Find full strategy
+            if strategy_config.type == SyncStrategy.FULL:
+                return SyncStrategy.FULL, strategy_config
+            else:
+                full_strategy = next((s for s in self.strategies if s.type == SyncStrategy.FULL and s.default), None)
+                return SyncStrategy.FULL, full_strategy
+        elif strategy_config.type == SyncStrategy.FULL:
+            hash_strategy = next((s for s in self.strategies if s.type == SyncStrategy.HASH and s.default), None)
+            return SyncStrategy.HASH, hash_strategy
     
         
         if strategy_name:

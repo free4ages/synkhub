@@ -4,6 +4,7 @@ from .data_fetch import DataFetchStage
 from .transform import TransformStage
 from .enrich import EnrichStage
 from .batcher import BatcherStage
+from .dedup import DedupStage
 from .populate import PopulateStage
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     'TransformStage',
     'EnrichStage',
     'BatcherStage',
+    'DedupStage',
     'PopulateStage'
 ]

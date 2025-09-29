@@ -28,6 +28,8 @@ class ConnectionConfig:
     # Connection pool settings
     max_connections: int = 10
     min_connections: int = 1
+    # StarRocks specific
+    http_port: Optional[int] = None
 
 
 @dataclass
@@ -51,6 +53,23 @@ class DataStore:
         # Initialize capability caches
         self._computed_capabilities: Optional[Set[Capability]] = None
         self._capability_lookup: Optional[Dict[Capability, bool]] = None
+        
+        # Initialize the appropriate datastore implementation
+        self._datastore_impl = None
+        self._create_datastore_implementation()
+    
+    def _create_datastore_implementation(self):
+        """Create the appropriate datastore implementation based on type"""
+        from ..datastore import PostgresDatastore, MySQLDatastore, StarRocksDatastore
+        
+        if self.type == 'postgres':
+            self._datastore_impl = PostgresDatastore(self.name, self.connection)
+        elif self.type == 'mysql':
+            self._datastore_impl = MySQLDatastore(self.name, self.connection)
+        elif self.type == 'starrocks':
+            self._datastore_impl = StarRocksDatastore(self.name, self.connection)
+        else:
+            raise ValueError(f"Unsupported datastore type: {self.type}")
     
     def get_capabilities(self) -> Set[Capability]:
         """Get capabilities with simple instance caching"""
@@ -93,6 +112,63 @@ class DataStore:
             self.get_capabilities()  # Populate caches
         
         return self._capability_lookup.get(capability, False)
+    
+    async def connect(self, logger=None) -> None:
+        """Connect to the datastore - idempotent operation"""
+        if not self._datastore_impl:
+            raise RuntimeError(f"No datastore implementation available for type: {self.type}")
+        await self._datastore_impl.connect(logger)
+    
+    async def disconnect(self, logger=None) -> None:
+        """Disconnect from the datastore - idempotent operation"""
+        if self._datastore_impl:
+            await self._datastore_impl.disconnect(logger)
+    
+    async def get_connection_pool(self):
+        """Get the connection pool for database operations"""
+        if not self._datastore_impl:
+            raise RuntimeError(f"No datastore implementation available for type: {self.type}")
+        return await self._datastore_impl.get_connection_pool()
+    
+    async def get_http_session(self):
+        """Get the HTTP session for StarRocks stream load operations"""
+        if not self._datastore_impl:
+            raise RuntimeError(f"No datastore implementation available for type: {self.type}")
+        return await self._datastore_impl.get_http_session()
+    
+    async def set_session_variables_for_connection(self, conn, logger=None):
+        """Set session variables for StarRocks connections - track to avoid duplicates"""
+        if self._datastore_impl and hasattr(self._datastore_impl, 'set_session_variables_for_connection'):
+            await self._datastore_impl.set_session_variables_for_connection(conn, logger)
+    
+    async def execute_query(
+        self, 
+        query: str, 
+        params: Optional[List[Any]] = None,
+        action: str = 'select'
+    ) -> Union[List[Dict[str, Any]], int]:
+        """
+        Execute a raw SQL query against the datastore.
+        
+        Args:
+            query: SQL query string
+            params: Optional query parameters
+            action: Type of query ('select', 'insert', 'update', 'delete')
+            
+        Returns:
+            For SELECT queries: List of dictionaries representing rows
+            For DML queries: Number of affected rows
+        """
+        if not self._datastore_impl:
+            raise RuntimeError(f"No datastore implementation available for type: {self.type}")
+        return await self._datastore_impl.execute_query(query, params, action)
+    
+    @property
+    def is_connected(self) -> bool:
+        """Check if the datastore is currently connected"""
+        if not self._datastore_impl:
+            return False
+        return self._datastore_impl.is_connected
 
 
 @dataclass  
@@ -115,6 +191,23 @@ class DataStorage:
     def get_datastores_by_type(self, store_type: str) -> List[DataStore]:
         """Get all data stores of a specific type"""
         return [ds for ds in self.datastores.values() if ds.type == store_type]
+    
+    async def connect_all(self, logger=None) -> None:
+        """Connect to all datastores"""
+        for datastore in self.datastores.values():
+            await datastore.connect(logger)
+    
+    async def disconnect_all(self, logger=None) -> None:
+        """Disconnect from all datastores"""
+        for datastore in self.datastores.values():
+            await datastore.disconnect(logger)
+    
+    async def __aenter__(self):
+        await self.connect_all()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.disconnect_all()
 
 
 # @dataclass
@@ -191,7 +284,7 @@ class StrategyConfig:
     secondary_partitions: List[DimensionPartitionConfig] = field(default_factory=list)
     delta_partitions: List[DimensionPartitionConfig] = field(default_factory=list)
     
-    prevent_update_unless_changed: bool = True
+    prevent_update_unless_changed: bool = False
     use_pagination: bool = False
     page_size: int = 1000
     cron: Optional[str] = None
@@ -346,6 +439,7 @@ class GlobalStageConfig:
     name: str
     type: Optional[str] = None
     enabled: bool = True
+    applicable_on: Optional[Union[str, List[str], Dict[str, Any]]] = None
     source: Optional[BackendConfig] = None
     hash_algo: Optional[HashAlgo] = HashAlgo.HASH_MD5_HASH
     destination: Optional[BackendConfig] = None

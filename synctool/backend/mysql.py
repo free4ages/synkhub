@@ -24,35 +24,28 @@ class MySQLBackend(SqlBackend):
         return self.connection_config.database or "default"
 
     async def connect(self):
-        try:
-            import aiomysql
-            self._pool = await aiomysql.create_pool(
-                host=self.connection_config.host,
-                port=self.connection_config.port or 3306,
-                user=self.connection_config.user,
-                password=self.connection_config.password,
-                db=self.connection_config.database,
-                autocommit=True
-            )
-        except ImportError:
-            raise ImportError("aiomysql is required for MySQL provider")
+        """Connect to MySQL database via DataStore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        await self._datastore.connect(self.logger)
 
     async def disconnect(self):
-        if self._pool:
-            self._pool.close()
-            await self._pool.wait_closed()
+        """Disconnect from MySQL database via DataStore"""
+        if self._datastore:
+            await self._datastore.disconnect(self.logger)
 
     async def execute_query(self, query: str, params: Optional[list] = None, action: Optional[str] = 'select') -> List[Dict]:
-        async with self._pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute(query, params or [])
-                if action == 'select':
-                    return await cur.fetchall()
-                elif action == 'delete':
-                    await conn.commit()
-                    return cur.rowcount
-                else:
-                    raise ValueError(f"Invalid action: {action}")
+        """Execute query and return List[Dict]"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        
+        result = await self._datastore.execute_query(query, params, action)
+        
+        # Handle different return types based on action
+        if action == 'select':
+            return result  # Already a list of dictionaries
+        else:
+            return result  # Number of affected rows
 
     async def has_data(self) -> bool:
         table = self._get_full_table_name(self.table)
@@ -180,7 +173,8 @@ class MySQLBackend(SqlBackend):
         max_safe_rows = MAX_MYSQL_PARAMS // len(column_keys)
         safe_batch_size = min(batch_size, max_safe_rows)
 
-        async with self._pool.acquire() as conn:
+        connection_pool = await self._datastore.get_connection_pool()
+        async with connection_pool.acquire() as conn:
             async with conn.cursor() as cur:
                 for i in range(0, len(data), safe_batch_size):
                     batch = data[i:i + safe_batch_size]

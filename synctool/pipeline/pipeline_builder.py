@@ -66,7 +66,7 @@ class PipelineBuilder:
         from .stages.batcher import BatcherStage
         from .stages.populate import PopulateStage
         from .stages.partition import PartitionStage
-        
+        from .stages.dedup import DedupStage
 
         
         pipeline = Pipeline(pipeline_config, self.logger)
@@ -118,6 +118,16 @@ class PipelineBuilder:
                 pipeline.add_stage(stage)
             elif stage_config.type == 'batcher':
                 stage = BatcherStage(
+                    self.sync_engine,
+                    stage_config,
+                    pipeline_config,
+                    self.logger,
+                    self.data_storage,
+                    self.progress_manager
+                )
+                pipeline.add_stage(stage)
+            elif stage_config.type == 'dedup':
+                stage = DedupStage(
                     self.sync_engine,
                     stage_config,
                     pipeline_config,
