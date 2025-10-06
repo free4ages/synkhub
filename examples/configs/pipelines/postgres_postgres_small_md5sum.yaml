@@ -203,12 +203,12 @@ stages:
           - first_name
           - last_name
         transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
-        expr: 'name'
+        name: 'name'
         data_type: 'varchar'
       - columns:
           - uid
         transform: 'lambda x: str(x["uid"])'
-        expr: 'uid'
+        name: 'uid'
         data_type: 'uuid_text_dash'
   - name: 'populate'
     type: 'populate'

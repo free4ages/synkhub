@@ -326,7 +326,7 @@ class StrategyConfig:
 class TransformationConfig:
     """Transformation configuration"""
     transform: Union[str, Callable]
-    expr: str
+    name: str
     data_type: Optional[str] = None
     columns: Optional[List[str]] = field(default_factory=list)
 

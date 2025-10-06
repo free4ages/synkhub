@@ -115,7 +115,7 @@ class TransformStage(PipelineStage):
                 for transform_config in self.transformations:
                     transform_func = transform_config.transform
                     value = transform_func(row)
-                    row[transform_config.expr] = value
+                    row[transform_config.name] = value
             
             # batch.data = transformed_data
             batch.batch_metadata["transformed"] = True

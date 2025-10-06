@@ -2,6 +2,9 @@ name: 'postgres_postgres_small_delete'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
 sync_type: 'row-level'
 
+
+
+
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
 max_concurrent_partitions: 1
@@ -12,15 +15,13 @@ strategies:
     type: 'delta'
     default: true
     primary_partitions:
-      - column: 'updated_at'
+      - column: 'source_updated_at'
         step: 1 # 2 hours
         step_unit: 'day'
-        data_type: 'datetime'
     # secondary_partitions:
-    #   - column: 'updated_at'
+    #   - column: 'source_updated_at'
     #     step: 6 # 30 minutes
     #     step_unit: 'hour'
-    #     data_type: 'datetime'
     
 
     max_concurrent_partitions: 1
@@ -40,12 +41,10 @@ strategies:
       - column: 'order_date'
         step: 1
         step_unit: 'month'
-        data_type: 'datetime'
     secondary_partitions:
       - column: 'order_date'
         step: 1
         step_unit: 'day'
-        data_type: 'datetime'
     max_concurrent_partitions: 1
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
@@ -62,95 +61,94 @@ strategies:
       - column: 'order_date'
         step: 1
         step_unit: 'month'
-        data_type: 'datetime'
     secondary_partitions:
       - column: 'order_date'
         step: 1
         step_unit: 'day'
-        data_type: 'datetime'
     max_concurrent_partitions: 1
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false
     # use_sub_partition: true
 
-# columns:
-#   - name: 'user_id'
-#     unique_column: true     # If true then it will be used as a unique key for the table. Default in false
-#     order_column: true      # If true then it will be used as a order key for the table. Default in false
-#     partition_column: true  # If true then it will be used as a partition key for the table. Default in false
-#     data_type: 'integer'
-#     direction: 'asc'
-#     hash_column: true     # If true then it will be included in row hash calculation. Default in true
-#     data_column: true     # If true then it will be treated as a data field and will be included whenever a row is fetched. Default in true
-#   - name: 'first_name'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'last_name'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'email'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'created_at'
-#     data_type: 'datetime'
-#     hash_column: true
-#   - name: 'updated_at'
-#     data_type: 'datetime'
-#     hash_column: true
-#     delta_column: true      # If true then it will be used as parition key fro delta strategy. Default in false
-#   - name: 'status'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'name'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'checksum'
-#     data_type: 'varchar'
-#     hash_key: true
+pipeline_columns:
+  - name: 'order_id'
+    data_type: 'integer'
+    unique_column: true
+    order_column: true
+    direction: 'asc'
+  - name: 'order_date'
+    data_type: 'datetime'
+  - name: 'user_id'
+    data_type: 'integer'
+  - name: 'product_id'
+    data_type: 'integer'
+  - name: 'quantity'
+    data_type: 'integer'
+  - name: 'price'
+    data_type: 'decimal'
+  - name: 'amount'
+    data_type: 'decimal'
+  - name: 'discount'
+    data_type: 'decimal'
+  - name: 'category'
+    data_type: 'uuid'
+  - name: 'source_created_at'
+    data_type: 'datetime'
+  - name: 'source_updated_at'
+    data_type: 'datetime'
+  - name: 'user_email'
+    data_type: 'varchar'
+  - name: 'user_name'
+    data_type: 'varchar'
+  - name: 'product_name'
+    data_type: 'varchar'
+  - name: 'category_name'
+    data_type: 'varchar'
+  - name: 'first_name'
+    data_type: 'varchar'
+  - name: 'last_name'
+    data_type: 'varchar'
+  - name: 'order_hash'
+    data_type: 'integer'
+  - name: 'user_hash'
+    data_type: 'integer'
+  - name: 'user_detail_hash'
+    data_type: 'integer'
+  - name: 'product_hash'
+    data_type: 'integer'
+  - name: 'category_hash'
+    data_type: 'integer'
+
 backends:
   - name: 'source_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
     table: 'orders'
     schema: 'public'
-    # join:
-    #   - table: 'user_profiles_small'
-    #     alias: 'p'
-    #     'on': 'u.id = p.user_id'
-    #     type: 'left'
     filters: 
-      - column: 'u.deleted'
+      - column: 'deleted'
         operator: '='
         value: false
     columns:
       - name: 'order_id'
         expr: 'id'
-        order_column: true
-        direction: 'asc'
-        data_type: 'integer'
       - name: 'order_date'
-        data_type: 'datetime'
       - name: 'user_id'
-        data_type: 'integer'
       - name: 'product_id'
-        data_type: 'integer'
       - name: 'quantity'
-        data_type: 'integer'
       - name: 'price'
-        data_type: 'decimal'
       - name: 'amount'
-        data_type: 'decimal'
       - name: 'discount'
-        data_type: 'decimal'
       - name: 'category'
-        data_type: 'uuid'
       - name: 'source_created_at'
         expr: 'created_at'
-        data_type: 'datetime'
       - name: 'source_updated_at'
         expr: 'updated_at'
-        data_type: 'datetime'
+      - name: 'order_hash'
+        hash_key: true
+        virtual: true  # virtual means no real column exists in the database
+
   - name: 'destination_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
@@ -158,36 +156,27 @@ backends:
     schema: 'public_copy'
     columns:
       - name: 'order_id'
-        unique_column: true
-        data_type: 'integer'
       - name: 'order_date'
-        data_type: 'datetime'
       - name: 'user_id'
-        data_type: 'integer'
       - name: 'product_id'
-        data_type: 'integer'
       - name: 'quantity'
-        data_type: 'integer'
       - name: 'price'
-        data_type: 'decimal'
       - name: 'amount'
-        data_type: 'decimal'
       - name: 'discount'
-        data_type: 'decimal'
       - name: 'category'
-        data_type: 'uuid'
       - name: 'source_created_at'
-        data_type: 'datetime'
       - name: 'source_updated_at'
-        data_type: 'datetime'
       - name: 'user_email'
-        data_type: 'varchar'
       - name: 'user_name'
-        data_type: 'varchar'
       - name: 'product_name'
-        data_type: 'varchar'
       - name: 'category_name'
-        data_type: 'varchar'
+      - name: 'order_hash'  # This is the hash against which change detection will be done
+        hash_key: true
+      - name: 'user_hash'
+      - name: 'user_detail_hash'
+      - name: 'product_hash'
+      - name: 'category_hash'
+
   - name: 'user_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
@@ -195,11 +184,13 @@ backends:
     schema: 'public'
     columns:
       - name: 'user_id'
-        data_type: 'integer'
+        expr: 'id'
       - name: 'first_name'
-        data_type: 'varchar'
       - name: 'last_name'
-        data_type: 'varchar'
+      - name: 'user_hash'
+        hash_key: true
+        virtual: true
+
   - name: 'user_detail_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
@@ -207,10 +198,12 @@ backends:
     schema: 'public'
     columns:
       - name: 'user_id'
-        data_type: 'integer'
       - name: 'user_email'
         expr: 'email'
-        data_type: 'varchar'
+      - name: 'user_detail_hash'
+        hash_key: true
+        virtual: true
+
   - name: 'product_detail_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
@@ -219,22 +212,27 @@ backends:
     columns:
       - name: 'product_id'
         expr: 'id'
-        data_type: 'integer'
       - name: 'product_name'
         expr: 'name'
-        data_type: 'varchar'
+      - name: 'product_hash'
+        hash_key: true
+        virtual: true
+
+
   - name: 'category_detail_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
     table: 'category'
     schema: 'public'
     columns:
-      - name: 'category_id'
+      - name: 'category'
         expr: 'id'
-        data_type: 'uuid'
       - name: 'category_name'
         expr: 'name'
-        data_type: 'varchar'
+      - name: 'category_hash'
+        hash_key: true
+        virtual: true
+
 stages:
   - name: 'partition_generator'
     type: 'partition'
@@ -243,6 +241,7 @@ stages:
       name: source_backend
     destination:
       name: destination_backend
+
   - name: 'change_detection'
     type: 'change_detection'
     enabled: true
@@ -250,29 +249,90 @@ stages:
       name: source_backend
     destination:
       name: destination_backend
-  - name: 'hash_fetch'
+
+  - name: 'data_fetch'
     type: 'data_fetch'
     enabled: true
     source:
       name: source_backend
     destination:
       name: destination_backend
+
   - name: 'hash_batcher'
     type: 'batcher'
     enabled: true
     config:
       target_batch_size: 10
+
   - name: 'join_user'
     type: 'join'
     enabled: true
     source:
-      name: join_backend
+      name: user_backend
     config:
       join_type: 'left'
       join_on:
         - data_key: 'user_id'
           backend_key: 'user_id'
           operator: '='
+      cache:
+        enabled: true
+        backend: 'redis'
+        url: 'redis://localhost:6379'
+        key_prefix: 'synctool:order:join:user:'
+        ttl: 60
+
+  - name: 'join_user_detail'
+    type: 'join'
+    enabled: true
+    source:
+      name: user_detail_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'user_id'
+          backend_key: 'user_id'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'memory'
+        policy: 'lru'
+        max_size: 1000
+
+  - name: 'join_product'
+    type: 'join'
+    enabled: true
+    source:
+      name: product_detail_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'product_id'
+          backend_key: 'product_id'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'memory'
+        policy: 'lru'
+        max_size: 100
+
+  - name: 'join_category'
+    type: 'join'
+    enabled: true
+    source:
+      name: category_detail_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'category'
+          backend_key: 'category'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'memory'
+        policy: 'lru'
+        max_size: 1000
+
   - name: 'transformation'
     type: 'transform'
     enabled: true
@@ -281,13 +341,8 @@ stages:
           - first_name
           - last_name
         transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
-        expr: 'name'
-        data_type: 'varchar'
-      - columns:
-          - uid
-        transform: 'lambda x: str(x["uid"])'
-        expr: 'uid'
-        data_type: 'uuid_text_dash'
+        name: 'user_name'
+        
   - name: 'populate'
     type: 'populate'
     enabled: true

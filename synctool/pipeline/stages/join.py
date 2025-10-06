@@ -112,6 +112,7 @@ class JoinStage(PipelineStage):
         
         # Parse join structure for ASOF
         self._parse_join_conditions()
+        # import pdb; pdb.set_trace()
         
         # Initialize cache backend if enabled
         self.cache_enabled = self.join_config.cache and self.join_config.cache.get('enabled', False)
@@ -119,7 +120,8 @@ class JoinStage(PipelineStage):
         
         if self.cache_enabled:
             try:
-                self.cache = get_cache_backend(self.join_config.cache)
+                cache_config = self.join_config.cache
+                self.cache = get_cache_backend(cache_config.get('backend'), cache_config)
                 self.logger.info(
                     f"Initialized {self.join_config.cache.get('type', 'memory')} cache "
                     f"with {self.join_config.cache.get('policy', 'lru')} policy"
@@ -235,7 +237,7 @@ class JoinStage(PipelineStage):
             
             # Fetch joined data (with caching and time bounds optimization)
             joined_data = await self._fetch_joined_data(lookup_keys, time_bounds)
-            
+            # import pdb; pdb.set_trace()
             # Merge or store joined data based on configuration
             if self.merge:
                 # Traditional merge: add columns to rows
@@ -367,6 +369,7 @@ class JoinStage(PipelineStage):
         """
         if not self.cache:
             return {}, lookup_keys
+        # import pdb; pdb.set_trace()
         
         # Convert to key tuples
         key_tuples = [self._dict_to_key_tuple(key_dict) for key_dict in lookup_keys]
@@ -713,7 +716,10 @@ class JoinStage(PipelineStage):
     
     async def _batch_fetch_standard(self, lookup_keys: List[Dict[str, Any]]) -> Dict[tuple, Any]:
         """Standard batch fetch (non-ASOF joins)"""
+        
         data_keys = [condition.data_key for condition in self.join_config.join_on]
+        # print(data_keys)
+        # import pdb; pdb.set_trace()
         partition_dimensions = []
         for key in data_keys:
             partition_dimensions.append(DimensionPartitionConfig(column=key, step=500, data_type=self.join_backend.db_column_schema.column(key).data_type, type="value"))

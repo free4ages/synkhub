@@ -59,10 +59,10 @@ class ColumnSchema:
     def transform_data(self, data: list[dict[str, Any]]) -> list[dict[str, Any]]:
         new_data = {}
         for col in self.columns_to_insert():
-            if not col.hash_key:
-                new_data[col.expr] = data[col.name]
-        if self.hash_key:
-            new_data[self.hash_key.expr] = data['hash__']
+            # if not col.hash_key:
+            new_data[col.expr] = data[col.name]
+        # if self.hash_key:
+        #     new_data[self.hash_key.expr] = data['hash__']
         return new_data
     
 

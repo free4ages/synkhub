@@ -1,5 +1,6 @@
 name: 'postgres_postgres_small_delete'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
+sync_type: 'row-level'
 
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
@@ -14,7 +15,6 @@ strategies:
       - column: 'updated_at'
         step: 1 # 2 hours
         step_unit: 'day'
-        data_type: 'datetime'
     # secondary_partitions:
     #   - column: 'updated_at'
     #     step: 6 # 30 minutes
@@ -38,11 +38,9 @@ strategies:
     primary_partitions:
       - column: 'user_id'
         step: 100
-        data_type: 'integer'
     secondary_partitions:
       - column: 'user_id'
         step: 10
-        data_type: 'integer'
     max_concurrent_partitions: 1
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
@@ -58,51 +56,44 @@ strategies:
     primary_partitions:
       - column: 'user_id'
         step: 100
-        data_type: 'integer'
     secondary_partitions:
       - column: 'user_id'
         step: 10
-        data_type: 'integer'
     max_concurrent_partitions: 1
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
     use_pagination: false
     # use_sub_partition: true
 
-# columns:
-#   - name: 'user_id'
-#     unique_column: true     # If true then it will be used as a unique key for the table. Default in false
-#     order_column: true      # If true then it will be used as a order key for the table. Default in false
-#     partition_column: true  # If true then it will be used as a partition key for the table. Default in false
-#     data_type: 'integer'
-#     direction: 'asc'
-#     hash_column: true     # If true then it will be included in row hash calculation. Default in true
-#     data_column: true     # If true then it will be treated as a data field and will be included whenever a row is fetched. Default in true
-#   - name: 'first_name'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'last_name'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'email'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'created_at'
-#     data_type: 'datetime'
-#     hash_column: true
-#   - name: 'updated_at'
-#     data_type: 'datetime'
-#     hash_column: true
-#     delta_column: true      # If true then it will be used as parition key fro delta strategy. Default in false
-#   - name: 'status'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'name'
-#     data_type: 'varchar'
-#     hash_column: true
-#   - name: 'checksum'
-#     data_type: 'varchar'
-#     hash_key: true
+pipeline_columns:
+  - name: 'user_id'
+    data_type: 'integer'
+    unique_column: true
+    order_column: true
+    direction: 'asc'
+  - name: 'uid'
+    data_type: 'uuid'
+  - name: 'first_name'
+    data_type: 'varchar'
+  - name: 'last_name'
+    data_type: 'varchar'
+  - name: 'email'
+    data_type: 'varchar'
+  - name: 'status'
+    data_type: 'varchar'
+  - name: 'created_at'
+    data_type: 'datetime'
+  - name: 'updated_at'
+    data_type: 'datetime'
+  - name: 'status'
+    data_type: 'varchar'
+  - name: 'name'
+    data_type: 'varchar'
+  - name: 'checksum_int'
+    data_type: 'integer'
+    hash_key: true
+
+
 backends:
   - name: 'source_backend'
     type: 'postgres'
@@ -122,33 +113,25 @@ backends:
     columns:
       - name: 'user_id'
         expr: 'u.id'
-        order_column: true
-        direction: 'asc'
-        data_type: 'integer'
       - name: 'uid'
         expr: 'u.uid'
-        data_type: 'uuid'
       - name: 'updated_at'
         expr: 'u.updated_at'
-        data_type: 'datetime'
       - name: 'first_name'
         expr: 'u.first_name'
-        data_type: 'varchar'
       - name: 'last_name'
         expr: 'u.last_name'
-        data_type: 'varchar'
       - name: 'email'
         expr: 'p.email'
-        data_type: 'varchar'
       - name: 'status'
         expr: 'u.status'
-        data_type: 'varchar'
       - name: 'created_at'
         expr: 'u.created_at'
-        data_type: 'datetime'
       - name: 'updated_at'
         expr: 'u.updated_at'
-        data_type: 'datetime'
+      - name: 'checksum_int'
+        virtual: true
+
   - name: 'destination_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
@@ -156,25 +139,17 @@ backends:
     schema: 'public_copy'
     columns:
       - name: 'user_id'
-        unique_column: true
-        data_type: 'integer'
       - name: 'uid'
         data_type: 'uuid_text_dash'
       - name: 'updated_at'
         expr: 'source_updated_at'
-        data_type: 'datetime'
       - name: 'created_at'
         expr: 'source_created_at'
-        data_type: 'datetime'
       - name: 'name'
-        data_type: 'varchar'
       - name: 'checksum_int'
-        data_type: 'integer'
-        hash_key: true
       - name: 'status'
-        data_type: 'varchar'
       - name: 'email'
-        data_type: 'varchar'
+
 stages:
   - name: 'partition_generator'
     type: 'partition'
@@ -210,12 +185,12 @@ stages:
           - first_name
           - last_name
         transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
-        expr: 'name'
+        name: 'name'
         data_type: 'varchar'
       - columns:
           - uid
         transform: 'lambda x: str(x["uid"])'
-        expr: 'uid'
+        name: 'uid'
         data_type: 'uuid_text_dash'
   - name: 'populate'
     type: 'populate'

@@ -471,7 +471,7 @@ class SqlBackend(Backend):
         if not self.column_schema:
             raise ValueError("No column schema configured")
         
-        columns_to_fetch = columns or self.column_schema.columns
+        columns_to_fetch = columns or self.column_schema.columns_to_fetch()
         
         for col in columns_to_fetch:
             select.append(Field(expr=col.expr or col.name, alias=col.name))
@@ -481,16 +481,17 @@ class SqlBackend(Backend):
         
         if with_hash:
             hash_column = self.db_column_schema.hash_key
-            if hash_column:
+            alias = hash_column.name if hash_column else "hash__"
+            if hash_column and not hash_column.virtual:
                 # hash_columns is a list of Column objects
-                select.append(Field(expr=hash_column.expr, alias='hash__'))
+                select.append(Field(expr=hash_column.expr, alias=alias))
             elif is_group:
                 hash_columns = [Field(expr=col.expr or col.name) for col in self.db_column_schema.columns_to_hash()]
-                select.append(Field(expr="", alias="hash__", type="grouphash", metadata=GroupHashMeta(strategy=hash_algo, fields=hash_columns)))
+                select.append(Field(expr="", alias=alias, type="grouphash", metadata=GroupHashMeta(strategy=hash_algo, fields=hash_columns)))
             else:
                 # Generate hash from all columns
                 hash_columns = [Field(expr=col.expr or col.name) for col in self.db_column_schema.columns_to_hash()]
-                select.append(Field(expr="", alias="hash__", type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_columns)))
+                select.append(Field(expr="", alias=alias, type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_columns)))
         return select
  
 

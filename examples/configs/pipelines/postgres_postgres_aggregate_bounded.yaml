@@ -223,21 +223,7 @@ stages:
     enabled: true
     config:
       target_batch_size: 10
-  # - name: 'transformation'
-  #   type: 'transform'
-  #   enabled: true
-  #   transformations:
-  #     - columns:
-  #         - first_name
-  #         - last_name
-  #       transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
-  #       expr: 'name'
-  #       data_type: 'varchar'
-  #     - columns:
-  #         - uid
-  #       transform: 'lambda x: str(x["uid"])'
-  #       expr: 'uid'
-  #       data_type: 'uuid_text_dash'
+
   - name: 'populate'
     type: 'populate'
     enabled: true

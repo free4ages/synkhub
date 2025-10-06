@@ -481,7 +481,7 @@ class PostgresBackend(SqlBackend):
             metadata=BlockHashMeta(
                 order_column=order_column_expr,
                 # partition_column = partition_column.expr,
-                hash_column = hash_column.expr if hash_column else None,
+                hash_column = hash_column.expr if hash_column and not hash_column.virtual else None,
                 strategy = hash_algo,
                 fields = [Field(expr=x.expr) for x in self.db_column_schema.columns_to_hash()],
                 # partition_column_type=partition_column_type
@@ -619,9 +619,10 @@ class PostgresBackend(SqlBackend):
         upsert: bool = True
     ) -> int:
         """Efficiently upserts data into PostgreSQL using asyncpg with fallback error handling."""
+        # import pdb; pdb.set_trace()
         data = data_batch.data
         data = self._process_pre_insert_data(data)
-        # import pdb; pdb.set_trace()
+        
         if not data:
             return 0
 

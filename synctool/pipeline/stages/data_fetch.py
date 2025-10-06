@@ -50,6 +50,8 @@ class DataFetchStage(PipelineStage):
             unique_columns = [dest_column_schema.column(col) for col in unique_columns]
         self.unique_columns = unique_columns
 
+        self.hash_compare_key = self.destination_backend.column_schema.hash_key.name
+
     
     async def process(self, input_stream: AsyncIterator[DataBatch]) -> AsyncIterator[DataBatch]:
         async for batch in input_stream:
@@ -114,6 +116,7 @@ class DataFetchStage(PipelineStage):
             )
     
     async def _process_hash_batch(self, batch: DataBatch, strategy_config: StrategyConfig):
+        
         partition = batch.batch_metadata.get("partition")
         prevent_update_unless_changed = strategy_config.prevent_update_unless_changed
         sync_type = self.pipeline_config.sync_type
@@ -706,7 +709,7 @@ class DataFetchStage(PipelineStage):
     def _compare_data_sets(self, source_data: List[Dict[str, Any]], dest_data: List[Dict[str, Any]]) -> Generator[Tuple[List[Dict[str, Any]], Dict[str, Any]], None, None]:
         """Compare source and destination data sets and return differences"""
         # Get unique columns for comparison
-        
+        # import pdb; pdb.set_trace()
         unique_columns = [col.name for col in self.unique_columns]
 
 
@@ -746,8 +749,8 @@ class DataFetchStage(PipelineStage):
             else:
                 dest_row = dest_lookup[key]
                 # Compare by hash if available
-                source_hash = source_row.get('hash__')
-                dest_hash = dest_row.get('hash__')
+                source_hash = source_row.get(self.hash_compare_key)
+                dest_hash = dest_row.get(self.hash_compare_key)
                 if source_hash != dest_hash:
                     source_row["old__"] = dest_row
                     modified.append(source_row)
