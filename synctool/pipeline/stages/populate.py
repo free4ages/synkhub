@@ -48,7 +48,7 @@ class PopulateStage(PipelineStage):
         metadata = batch.batch_metadata
         change_type = metadata.get("change_type")
         partition = metadata.get("partition")
-        complete_partition = metadata.get("complete_partition")
+        # complete_partition = metadata.get("complete_partition")
         # strategy = metadata.get("strategy_type")
         self.logger.info(f"Populating batch {batch.batch_id}: {change_type} with {len(batch.data)} rows")
         # import pdb; pdb.set_trace()
@@ -58,24 +58,22 @@ class PopulateStage(PipelineStage):
             rows_updated = 0
             rows_deleted = 0
             failed_partitions = set()
+            rows_failed = 0
             
             if change_type == DataStatus.DELETED:
                 # Handle deletion
-                if partition and complete_partition:
-                    try:
-                        await self.destination_backend.delete_partition_data(partition)
-                        rows_deleted = partition.num_rows
-                        batch.batch_metadata["rows_deleted"] = rows_deleted
-                    except Exception as e:
-                        traceback.print_exc()
-                        rows_failed = len(batch.data) or partition.num_rows
-                        batch.batch_metadata["rows_failed"] = rows_failed
+                try:
+                    await self.destination_backend.delete_partition_data(partition)
+                    rows_deleted = partition.num_rows
+                    batch.batch_metadata["rows_deleted"] = rows_deleted
+                except Exception as e:
+                    traceback.print_exc()
+                    rows_failed = len(batch.data) or partition.num_rows
+                    batch.batch_metadata["rows_failed"] = rows_failed
                     
                     # Update progress with deletion count
-                    if self.progress_manager:
-                        self.progress_manager.update_progress(rows_deleted=rows_deleted)
-                else:
-                    pass
+                if self.progress_manager:
+                    self.progress_manager.update_progress(rows_deleted=rows_deleted, rows_failed=rows_failed)
             elif change_type == DataStatus.ADDED:
                 try:
                     success, failed = await self.destination_backend.insert_data(batch, upsert=True)

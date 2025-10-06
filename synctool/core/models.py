@@ -218,7 +218,6 @@ class DataStorage:
 #     insert: bool = True
 #     transform: Optional[str] = None
 
-
 @dataclass
 class JoinConfig:
     """Join configuration for source queries"""
@@ -226,6 +225,36 @@ class JoinConfig:
     on: str
     type: str = "inner"
     alias: Optional[str] = None
+
+@dataclass
+class JoinCondition:
+    """Single join condition"""
+    data_key: str              # Column from the data stream
+    backend_key: str           # Column from the backend table
+    operator: str = '='        # Comparison operator: '=', '>=', '<=', '>', '<', '!='
+
+@dataclass
+class AsofConfig:
+    """Configuration for ASOF join time conditions"""
+    data_key: str                           # Time column in data stream
+    valid_from_column: str                  # Start of validity period in backend
+    valid_to_column: Optional[str] = None   # End of validity period in backend (optional)
+    operator: str = '<='                    # Operator for valid_from comparison
+    
+    # For valid_to: if provided, adds condition: data_key < valid_to (or IS NULL for current records)
+    include_open_ended: bool = True         # If True, matches records where valid_to IS NULL
+
+@dataclass
+class JoinStageConfig:
+    """Configuration for join stage"""
+    join_type: str                          # 'left', 'right', 'inner', 'asof_left'
+    join_on: List[JoinCondition]            # List of join conditions
+    asof: Optional[AsofConfig] = None       # ASOF-specific configuration (alternative to join_on)
+    fetch_columns: Optional[List[Dict[str, str]]] = None  # Columns to fetch
+    cache: Optional[Dict[str, Any]] = None  # Cache configuration
+    cardinality: str = 'one_to_one'         # 'one_to_one' or 'one_to_many'
+    merge: bool = True                      # Whether to merge joined data into rows
+    output_key: Optional[str] = None        # If merge=False, key name for storing joined data
 
 
 @dataclass
@@ -572,9 +601,11 @@ class PartitionBound:
 class MultiDimensionPartition:
     """Multi-dimensional partition with multiple column bounds"""
     dimensions: List[DimensionPartition]
+    composite_dimensions: List['CompositeDimensionPartition'] = field(default_factory=list)
     parent_partition: Optional['MultiDimensionPartition'] = None
     level: int = 0
     num_rows: int = 0
+    count_diff: int = 0
     hash: Union[str, int, None] = None
 
     @property
@@ -608,19 +639,161 @@ class MultiDimensionPartition:
                 return True
         return False
     
-    def get_partition_bounds(self) -> List[PartitionBound]:
+    def _get_composite_dimension_partition_bound(self, composite_dim: 'CompositeDimensionPartition') -> 'CompositePartitionBound':
+        """Convert composite dimension to partition bound"""
+        if composite_dim.is_range_based:
+            return CompositePartitionBound(
+                columns=composite_dim.columns,
+                data_types=composite_dim.data_types,
+                dimension_types=[dim.type for dim in composite_dim.dimensions],
+                start_values=composite_dim.start_values,
+                end_values=composite_dim.end_values,
+                type="composite_range"
+            )
+        elif composite_dim.is_value_based:
+            return CompositePartitionBound(
+                columns=composite_dim.columns,
+                data_types=composite_dim.data_types,
+                dimension_types=[dim.type for dim in composite_dim.dimensions],
+                value_tuples=composite_dim.value_tuples,
+                type="composite_values"
+            )
+        elif composite_dim.has_mixed_types:
+            # For mixed types, we'll handle this in the generator
+            # This is a placeholder for mixed composite bounds
+            return CompositePartitionBound(
+                columns=composite_dim.columns,
+                data_types=composite_dim.data_types,
+                dimension_types=[dim.type for dim in composite_dim.dimensions],
+                type="composite_mixed"
+            )
+        else:
+            raise ValueError("Invalid composite dimension configuration")
+
+    def get_partition_bounds(self) -> List[Union[PartitionBound, 'CompositePartitionBound']]:
         partition_bounds = []
         handled_columns = set()
+        
+        # Handle regular dimension partitions
         for dimension in self.dimensions:
             partition_bounds.append(self._get_dimension_partition_bound(dimension))
             handled_columns.add(dimension.column)
+            
+        # Handle composite dimension partitions  
+        for composite_dim in self.composite_dimensions:
+            partition_bounds.append(self._get_composite_dimension_partition_bound(composite_dim))
+            handled_columns.update(composite_dim.columns)
+            
+        # Handle parent partitions
         if self.parent_partition:
             for dimension in self.parent_partition.dimensions:
                 if dimension.column not in handled_columns:
                     partition_bounds.append(PartitionBound(column=dimension.column, start=dimension.start, end=dimension.end, data_type=dimension.data_type, type=dimension.type))
                     handled_columns.add(dimension.column)
+                    
         return partition_bounds
+
+
+@dataclass
+class CompositeDimensionConfig:
+    """Configuration for a single dimension within a composite partition"""
+    column: str
+    data_type: str
+    type: str = "range"  # "range", "value", "upper_bound", "lower_bound" 
+    step: int = 1
+    step_unit: str = ""
+
+
+@dataclass
+class CompositeDimensionPartition:
+    """Composite partition for multiple columns supporting both ranges and discrete values"""
+    dimensions: List[CompositeDimensionConfig]  # Configuration for each dimension
+    partition_id: str = "0"
+    level: int = 0
+    type: str = "composite"
     
+    # For range-based composite partitions (e.g., datetime ranges + user_id ranges)
+    start_values: Optional[Tuple[Any, ...]] = None  # Start values for each dimension
+    end_values: Optional[Tuple[Any, ...]] = None    # End values for each dimension
+    
+    # For discrete value-based composite partitions (e.g., specific user_id, product_id tuples)
+    value_tuples: Optional[List[Tuple[Any, ...]]] = None  # List of discrete value tuples
+    
+    def __post_init__(self):
+        """Validate that either ranges or discrete values are provided"""
+        has_ranges = self.start_values is not None and self.end_values is not None
+        has_values = self.value_tuples is not None
+        
+        if not (has_ranges or has_values):
+            raise ValueError("CompositeDimensionPartition must have either range values or discrete value tuples")
+        
+        if has_ranges and has_values:
+            raise ValueError("CompositeDimensionPartition cannot have both range values and discrete value tuples")
+    
+    @property
+    def columns(self) -> List[str]:
+        """Get column names in order"""
+        return [dim.column for dim in self.dimensions]
+    
+    @property
+    def data_types(self) -> List[str]:
+        """Get data types in order"""
+        return [dim.data_type for dim in self.dimensions]
+    
+    @property
+    def is_range_based(self) -> bool:
+        """Check if this is a range-based composite partition"""
+        return self.start_values is not None and self.end_values is not None
+    
+    @property 
+    def is_value_based(self) -> bool:
+        """Check if this is a discrete value-based composite partition"""
+        return self.value_tuples is not None
+    
+    @property
+    def has_mixed_types(self) -> bool:
+        """Check if partition has both range and value dimensions"""
+        types = {dim.type for dim in self.dimensions}
+        return len(types) > 1
+
+
+@dataclass 
+class CompositePartitionBound:
+    """Partition bound for composite filtering"""
+    columns: List[str]
+    data_types: List[str]
+    dimension_types: List[str]  # "range" or "value" for each dimension
+    type: str = "composite"
+    
+    # For range-based bounds
+    start_values: Optional[Tuple[Any, ...]] = None
+    end_values: Optional[Tuple[Any, ...]] = None
+    
+    # For discrete value-based bounds  
+    value_tuples: Optional[List[Tuple[Any, ...]]] = None
+    
+    # For mixed bounds (some dimensions are ranges, others are values)
+    dimension_values: Optional[List[Any]] = None  # Mixed values corresponding to each dimension
+    
+    @property
+    def is_range_based(self) -> bool:
+        return self.start_values is not None and self.end_values is not None
+    
+    @property
+    def is_value_based(self) -> bool:
+        return self.value_tuples is not None
+    
+    @property
+    def is_mixed(self) -> bool:
+        return self.dimension_values is not None
+    
+    def get_range_dimensions(self) -> List[int]:
+        """Get indices of range-type dimensions"""
+        return [i for i, dim_type in enumerate(self.dimension_types) if dim_type == "range"]
+    
+    def get_value_dimensions(self) -> List[int]:
+        """Get indices of value-type dimensions"""
+        return [i for i, dim_type in enumerate(self.dimension_types) if dim_type == "value"]
 
 
 

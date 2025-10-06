@@ -203,7 +203,7 @@ class ChangeDetectionStage(PipelineStage):
         
     #     return await partition_generator.generate_partitions(sync_start, sync_end)
     
-    async def _process_full_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any) -> AsyncIterator[DataBatch]:
+    async def _process_full_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any, change_type: DataStatus=DataStatus.ADDED) -> AsyncIterator[DataBatch]:
         """Process full sync partitions concurrently"""
         partition = data_batch.batch_metadata.get("partition")
         if strategy_config.secondary_partitions:
@@ -220,7 +220,7 @@ class ChangeDetectionStage(PipelineStage):
                     context=job_context,
                     batch_metadata={
                         "partition": sub_partition,
-                        "change_type": DataStatus.ADDED,
+                        "change_type": change_type,
                         "complete_partition": True,
                     }
                 )
@@ -228,29 +228,30 @@ class ChangeDetectionStage(PipelineStage):
                 yield batch
         else:
             self.progress_manager.update_progress(total_partitions=1)
-            yield partition
+            yield data_batch
     
     
     async def _process_delta_partitions(self, data_batch: DataBatch, strategy_config: StrategyConfig, job_context: Any) -> AsyncIterator[DataBatch]:
         """Process delta sync partitions concurrently"""
         partition = data_batch.batch_metadata.get("partition")
-        async for batch in self._process_full_partitions(data_batch, strategy_config, job_context):
-            if not strategy_config.delta_partitions:
-                self.progress_manager.update_progress(total_partitions=1)
-                yield batch
-            else:
-                async for sub_partition in self._generate_delta_partitions(partition, strategy_config.delta_partitions, strategy_config):
-                    self.progress_manager.update_progress(total_partitions=1)
-                    batch = DataBatch(
-                        data=[],
-                        context=job_context,
-                        batch_metadata={
-                            "partition": sub_partition,
-                            "change_type": DataStatus.MODIFIED,
-                            "complete_partition": False,
-                        }
-                    )
-                    yield batch
+        async for batch in self._process_full_partitions(data_batch, strategy_config, job_context, change_type=DataStatus.MODIFIED):
+            yield batch
+            # if not strategy_config.delta_partitions:
+            #     self.progress_manager.update_progress(total_partitions=1)
+            #     yield batch
+            # else:
+            #     async for sub_partition in self._generate_delta_partitions(partition, strategy_config.delta_partitions, strategy_config):
+            #         self.progress_manager.update_progress(total_partitions=1)
+            #         batch = DataBatch(
+            #             data=[],
+            #             context=job_context,
+            #             batch_metadata={
+            #                 "partition": sub_partition,
+            #                 "change_type": DataStatus.MODIFIED,
+            #                 "complete_partition": False,
+            #             }
+            #         )
+            #         yield batch
 
                 
         # sub_partitions = await self._generate_sub_partitions(partition, strategy_config)
@@ -290,6 +291,7 @@ class ChangeDetectionStage(PipelineStage):
                         "complete_partition": True,
                     }
                 )
+                # import pdb; pdb.set_trace()
                 self.progress_manager.update_progress(rows_detected=part.num_rows, total_partitions=1)
                 yield batch
                 
@@ -451,13 +453,13 @@ class ChangeDetectionStage(PipelineStage):
     #     else:
     #         return [partition]
     
-    async def _generate_delta_partitions(self, partition: MultiDimensionPartition, partition_dimensions: List[DimensionPartitionConfig], strategy_config: StrategyConfig) -> List[Dict[str, Any]]:
-        source_backend = self.source_backend
-        if not partition_dimensions:
-            yield partition
-        data = await source_backend.fetch_partition_data(partition, with_hash=False)
-        for partition in build_multi_dimension_partitions_for_delta_data(data, partition_dimensions):
-            yield partition
+    # async def _generate_delta_partitions(self, partition: MultiDimensionPartition, partition_dimensions: List[DimensionPartitionConfig], strategy_config: StrategyConfig) -> List[Dict[str, Any]]:
+    #     source_backend = self.source_backend
+    #     if not partition_dimensions:
+    #         yield partition
+    #     data = await source_backend.fetch_partition_data(partition, with_hash=False)
+    #     for partition in build_multi_dimension_partitions_for_delta_data(data, partition_dimensions):
+    #         yield partition
 
 
 

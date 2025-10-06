@@ -21,7 +21,130 @@ class SqlBuilder:
                 raise ValueError(f"Unsupported dialect: {dialect}")
 
         def handle_filter(flt, filter_exprs, params):
-            """Handle individual filter, including IN queries"""
+            """Handle individual filter, including composite tuple filtering"""
+            
+            # Handle composite filtering
+            if getattr(flt, 'is_composite', False) and flt.is_composite:
+                if flt.operator.upper() == 'COMPOSITE_RANGE':
+                    # Handle composite range filtering: (col1, col2) >= (start1, start2) AND (col1, col2) < (end1, end2)
+                    if not (flt.start_values and flt.end_values):
+                        raise ValueError("Composite range filter requires start_values and end_values")
+                        
+                    column_list = f"({', '.join(flt.columns)})"
+                    
+                    # Build >= condition
+                    start_placeholders = []
+                    for val in flt.start_values:
+                        placeholder = get_placeholder(len(params))
+                        start_placeholders.append(placeholder)
+                        params.append(val)
+                    filter_exprs.append(f"{column_list} >= ({', '.join(start_placeholders)})")
+                    
+                    # Build < condition  
+                    end_placeholders = []
+                    for val in flt.end_values:
+                        placeholder = get_placeholder(len(params))
+                        end_placeholders.append(placeholder)
+                        params.append(val)
+                    filter_exprs.append(f"{column_list} < ({', '.join(end_placeholders)})")
+                    
+                elif flt.operator.upper() == 'COMPOSITE_MIXED':
+                    # Handle mixed range and value filtering
+                    if not flt.composite_bound:
+                        raise ValueError("Composite mixed filter requires composite_bound")
+                    
+                    bound = flt.composite_bound
+                    range_dims = bound.get_range_dimensions()
+                    value_dims = bound.get_value_dimensions()
+                    
+                    conditions = []
+                    
+                    # Handle range dimensions
+                    for dim_idx in range_dims:
+                        column = bound.columns[dim_idx]
+                        start_val, end_val = bound.dimension_values[dim_idx]  # tuple (start, end)
+                        
+                        start_placeholder = get_placeholder(len(params))
+                        params.append(start_val)
+                        conditions.append(f"{column} >= {start_placeholder}")
+                        
+                        end_placeholder = get_placeholder(len(params))
+                        params.append(end_val)
+                        conditions.append(f"{column} < {end_placeholder}")
+                    
+                    # Handle value dimensions
+                    if len(value_dims) == 1:
+                        # Single value dimension - use regular IN
+                        column = bound.columns[value_dims[0]]
+                        values = bound.dimension_values[value_dims[0]]
+                        if not isinstance(values, (list, tuple)):
+                            values = [values]
+                        
+                        placeholders = []
+                        for val in values:
+                            placeholder = get_placeholder(len(params))
+                            placeholders.append(placeholder)
+                            params.append(val)
+                        conditions.append(f"{column} IN ({', '.join(placeholders)})")
+                    elif len(value_dims) > 1:
+                        # Multiple value dimensions - use tuple IN
+                        value_columns = [bound.columns[i] for i in value_dims]
+                        column_list = f"({', '.join(value_columns)})"
+                        
+                        # Get all combinations of values for value dimensions
+                        value_lists = [bound.dimension_values[i] for i in value_dims]
+                        
+                        # Ensure all value dimensions have lists
+                        for i, val_list in enumerate(value_lists):
+                            if not isinstance(val_list, (list, tuple)):
+                                value_lists[i] = [val_list]
+                        
+                        # Generate cartesian product of value combinations
+                        import itertools
+                        value_combinations = list(itertools.product(*value_lists))
+                        
+                        tuple_placeholders = []
+                        for combo in value_combinations:
+                            tuple_params = []
+                            for val in combo:
+                                placeholder = get_placeholder(len(params))
+                                tuple_params.append(placeholder)
+                                params.append(val)
+                            tuple_placeholders.append(f"({', '.join(tuple_params)})")
+                        
+                        conditions.append(f"{column_list} IN ({', '.join(tuple_placeholders)})")
+                    
+                    # Combine all conditions with AND
+                    if conditions:
+                        filter_exprs.append(f"({' AND '.join(conditions)})")
+                        
+                elif flt.operator.upper() == 'IN':
+                    # Handle composite tuple IN filtering: (col1, col2) IN ((val1, val2), (val3, val4))
+                    if isinstance(flt.value, (list, tuple)) and all(isinstance(v, (list, tuple)) for v in flt.value):
+                        if not flt.value:  # Empty list
+                            filter_exprs.append("1=0")  # Always false condition
+                            return
+                            
+                        column_list = f"({', '.join(flt.columns)})"
+                        tuple_placeholders = []
+                        
+                        for value_tuple in flt.value:
+                            if len(value_tuple) != len(flt.columns):
+                                raise ValueError(f"Tuple length {len(value_tuple)} doesn't match columns length {len(flt.columns)}")
+                                
+                            tuple_params = []
+                            for val in value_tuple:
+                                placeholder = get_placeholder(len(params))
+                                tuple_params.append(placeholder)
+                                params.append(val)
+                            tuple_placeholders.append(f"({', '.join(tuple_params)})")
+                        
+                        filter_exprs.append(f"{column_list} IN ({', '.join(tuple_placeholders)})")
+                    else:
+                        raise ValueError("Composite tuple filter requires list of tuples as value")
+                return
+                
+            # Handle regular single-column filtering
             if flt.operator.upper() == 'IN':
                 # Handle IN operator with list of values
                 if isinstance(flt.value, (list, tuple)):

@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass, field, asdict
-from typing import List, Any, Optional, Union
+from typing import List, Any, Optional, Union, Tuple
 from ..core.models import DimensionPartitionConfig, MultiDimensionPartition
 
 @dataclass
@@ -42,6 +42,17 @@ class Filter:
     column: str
     operator: str
     value: Any
+    columns: Optional[List[str]] = None  # For composite tuple filtering
+    
+    # Additional fields for composite operations
+    start_values: Optional[Tuple[Any, ...]] = None  # For composite range start
+    end_values: Optional[Tuple[Any, ...]] = None    # For composite range end
+    composite_bound: Optional[Any] = None  # Reference to CompositePartitionBound
+    
+    @property 
+    def is_composite(self) -> bool:
+        """Check if this is a composite tuple filter"""
+        return self.columns is not None and len(self.columns) > 1
 
 @dataclass
 class Field:

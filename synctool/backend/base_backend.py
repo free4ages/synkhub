@@ -123,25 +123,25 @@ class BaseBackend(ABC):
         """Insert data into the provider"""
         pass
     
-    @abstractmethod
-    async def insert_delta_data(self, data: List[Dict], partition: Optional[MultiDimensionPartition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
-        """Insert data into the provider"""
-        pass
+    # @abstractmethod
+    # async def insert_delta_data(self, data: List[Dict], partition: Optional[MultiDimensionPartition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
+    #     """Insert data into the provider"""
+    #     pass
 
     @abstractmethod
     async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         pass
     
-    @abstractmethod
-    async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Fetch data based on partition bounds with optional pagination"""
-        pass
+    # @abstractmethod
+    # async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Fetch data based on partition bounds with optional pagination"""
+    #     pass
 
-    @abstractmethod
-    async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch partition row hashes from destination along with state columns"""
-        pass
+    # @abstractmethod
+    # async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    #     """Fetch partition row hashes from destination along with state columns"""
+    #     pass
 
     @abstractmethod
     async def get_partition_bounds(self) -> Tuple[Any, Any]:
@@ -322,22 +322,22 @@ class SqlBackend(Backend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Fetch data based on partition bounds with optional pagination"""
-        if partition is None:
-            # Handle case where no partition is provided
-            query = Query(
-                select=self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
-                table=self._build_table_query(),
-                joins=self._build_join_query(),
-                filters=self._build_filter_query(),
-                limit=page_size,
-                offset=offset
-            )
-        else:
-            query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
-        sql, params = self._build_sql(query)
-        return await self.execute_query(sql, params)
+    # async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Fetch data based on partition bounds with optional pagination"""
+    #     if partition is None:
+    #         # Handle case where no partition is provided
+    #         query = Query(
+    #             select=self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
+    #             table=self._build_table_query(),
+    #             joins=self._build_join_query(),
+    #             filters=self._build_filter_query(),
+    #             limit=page_size,
+    #             offset=offset
+    #         )
+    #     else:
+    #         query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
+    #     sql, params = self._build_sql(query)
+    #     return await self.execute_query(sql, params)
     
     async def fetch_child_partition_hashes(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         return []
@@ -350,23 +350,104 @@ class SqlBackend(Backend):
             final.append(self.column_schema.transform_data(d))
         return final
     
-    def _build_partition_data_query(self, partition: MultiDimensionPartition, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
-        filters = self._build_filter_query()
-        # if not self.column_schema or not self.column_schema.partition_column:
-        #     raise ValueError("No partition key configured in column schema")
-
+    def build_partition_filter_query(self, partition: MultiDimensionPartition) -> List[Filter]:
+        filters = []
         partition_bounds = partition.get_partition_bounds()
         for bound in partition_bounds:
-            column = self.db_column_schema.column(bound.column)
-            if bound.type == "range":
-                filters.extend([     
-                        Filter(column=column.expr, operator=">=", value=column.cast(bound.start)),
-                        Filter(column=column.expr, operator="<", value=column.cast(bound.end))
+            # Handle composite partition bounds
+            if hasattr(bound, 'columns') and len(bound.columns) > 1:  # CompositePartitionBound
+                column_exprs = [self.db_column_schema.column(col).expr for col in bound.columns]
+                column_objects = [self.db_column_schema.column(col) for col in bound.columns]
+                
+                if bound.type == "composite_range":
+                    # Handle composite range bounds: (datetime, user_id) >= (start_time, start_user) AND (datetime, user_id) < (end_time, end_user)
+                    casted_start = tuple(
+                        column_objects[i].cast(bound.start_values[i]) 
+                        for i in range(len(bound.start_values))
+                    )
+                    casted_end = tuple(
+                        column_objects[i].cast(bound.end_values[i]) 
+                        for i in range(len(bound.end_values))
+                    )
+                    
+                    filters.append(Filter(
+                        column="",  # Not used for composite
+                        columns=column_exprs,
+                        operator="composite_range",
+                        value=None,
+                        start_values=casted_start,
+                        end_values=casted_end
+                    ))
+                    
+                elif bound.type == "composite_values":
+                    # Handle composite discrete values: (user_id, product_id) IN ((1, 2), (3, 1))
+                    casted_tuples = []
+                    for value_tuple in bound.value_tuples:
+                        casted_tuple = tuple(
+                            column_objects[i].cast(value_tuple[i]) 
+                            for i in range(len(value_tuple))
+                        )
+                        casted_tuples.append(casted_tuple)
+                    
+                    filters.append(Filter(
+                        column="",  # Not used for composite
+                        columns=column_exprs,
+                        operator="in", 
+                        value=casted_tuples
+                    ))
+                    
+                elif bound.type == "composite_mixed":
+                    # Handle mixed range and value dimensions
+                    casted_values = []
+                    for i, val in enumerate(bound.dimension_values):
+                        if bound.dimension_types[i] == "range":
+                            # val is tuple (start, end) - cast both
+                            start_casted = column_objects[i].cast(val[0])
+                            end_casted = column_objects[i].cast(val[1])
+                            casted_values.append((start_casted, end_casted))
+                        else:  # "value"
+                            # val is single value or list - cast appropriately
+                            if isinstance(val, (list, tuple)):
+                                casted_values.append([column_objects[i].cast(v) for v in val])
+                            else:
+                                casted_values.append(column_objects[i].cast(val))
+                    
+                    # Create a special filter for mixed composite
+                    from ..core.models import CompositePartitionBound
+                    composite_filter = Filter(
+                        column="",  # Not used
+                        columns=column_exprs,
+                        operator="composite_mixed",
+                        value=None
+                    )
+                    # Attach the bound object for detailed processing
+                    composite_filter.composite_bound = CompositePartitionBound(
+                        columns=bound.columns,
+                        data_types=bound.data_types,
+                        dimension_types=bound.dimension_types,
+                        dimension_values=casted_values
+                    )
+                    filters.append(composite_filter)
+                    
+            else:
+                # Handle regular single-column bounds
+                column = self.db_column_schema.column(bound.column)
+                if bound.type == "range":
+                    filters.extend([     
+                            Filter(column=column.expr, operator=">=", value=column.cast(bound.start)),
+                            Filter(column=column.expr, operator="<", value=column.cast(bound.end))
+                        ])
+                elif bound.type == "value":
+                    filters.extend([
+                        Filter(column=column.expr, operator="in", value=[column.cast(x) for x in bound.value])
                     ])
-            elif bound.type == "value":
-                filters.extend([
-                    Filter(column=column.expr, operator="in", value=[column.cast(x) for x in bound.value])
-                ])
+        return filters
+    
+    def _build_partition_data_query(self, partition: MultiDimensionPartition, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
+        filters = self._build_filter_query()
+        partition_filters = self.build_partition_filter_query(partition)
+        filters.extend(partition_filters)
+        
         
         # Add pagination if specified
         limit = page_size if page_size is not None else None

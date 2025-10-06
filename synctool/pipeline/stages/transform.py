@@ -5,6 +5,7 @@ from ...core.models import DataStorage, TransformationConfig, GlobalStageConfig,
 from ...core.schema_models import UniversalDataType
 from ...utils import safe_eval
 from ..base import PipelineStage
+from ...core.enums import DataStatus
 if TYPE_CHECKING:
     from ...sync.sync_engine import SyncEngine
     from ...utils.progress_manager import ProgressManager
@@ -102,6 +103,9 @@ class TransformStage(PipelineStage):
     async def process_batch(self, batch: DataBatch) -> DataBatch:
         """Apply transformations to the batch data"""
         # import pdb; pdb.set_trace()
+        change_type = batch.batch_metadata.get("change_type")
+        if change_type == DataStatus.DELETED:
+            return batch
         if not batch.data or not self.transformations:
             return batch
         

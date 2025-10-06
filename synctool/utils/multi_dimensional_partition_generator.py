@@ -49,49 +49,286 @@ def build_multi_dimension_child_partitions(partitions: List[Dict[str, Any]], par
         multi_dim_partition = MultiDimensionPartition(
             dimensions=dims,
             parent_partition=parent_partition,
-            level=parent_partition.level+1
+            level=parent_partition.level+1,
+            num_rows=partition["num_rows"],
+            count_diff=partition["count_diff"]
         )
         multi_dim_partitions.append(multi_dim_partition)
     return multi_dim_partitions
 
-def build_multi_dimension_partitions_for_delta_data(data: List[Dict[str, Any]], dimension_configs: List[DimensionPartitionConfig]) -> MultiDimensionPartition:
-    dimension_values = []
+def build_multi_dimension_partitions_for_delta_data(data: List[Dict[str, Any]], dimension_configs: List[DimensionPartitionConfig]) -> Generator[Tuple[MultiDimensionPartition, List[Dict[str, Any]]], None, None]:
+    """
+    DEPRECATED: This function creates unnecessary partitions when multiple value dimensions are used.
+    Use build_multi_dimension_partitions_for_delta_data_composite instead.
+    
+    Now returns tuples of (partition, corresponding_data) instead of just partitions.
+    """
+    # if only single value dimensions are present, or two dimension with different type should use simple generator
+    
+    range_configs = [d for d in dimension_configs if d.type == "range"]
+    value_configs = [d for d in dimension_configs if d.type == "value"]
+    
+    if len(value_configs) <= 1 and len(range_configs) <= 1:
+        yield from build_multi_dimension_partitions_for_delta_data_simple(data, dimension_configs)
+        return
+    
+    # Import the new composite generator
+    from .composite_partition_generator import build_multi_dimension_partitions_for_delta_data_composite
+    # Use the new composite logic instead
+    yield from build_multi_dimension_partitions_for_delta_data_composite(data, dimension_configs)
+
+
+def build_multi_dimension_partitions_for_delta_data_simple(data: List[Dict[str, Any]], dimension_configs: List[DimensionPartitionConfig]) -> Generator[Tuple[MultiDimensionPartition, List[Dict[str, Any]]], None, None]:
+    """
+    Refactored implementation that returns both partition and corresponding data.
+    Supports dimension_config types: value, range, or combinations of (range, value).
+    Returns MultiDimensionPartition with dimensions attribute of type DimensionPartition.
+    """
+    if not data or not dimension_configs:
+        return
+    
+    # Separate range and value dimensions
+    range_configs = [d for d in dimension_configs if d.type == "range"]
+    value_configs = [d for d in dimension_configs if d.type == "value"]
+    
+    if not value_configs:
+        # Only range dimensions - create partitions with range bounds
+        yield from _build_range_only_partitions_simple(data, range_configs)
+        return
+    
+    if not range_configs:
+        # Only value dimensions - create partitions with discrete values
+        yield from _build_value_only_partitions_simple(data, value_configs)
+        return
+    
+    # Mixed range and value dimensions - group by ranges, then handle values within each group
+    yield from _build_mixed_partitions_simple(data, range_configs, value_configs)
+
+
+def _build_range_only_partitions_simple(
+    data: List[Dict[str, Any]], 
+    range_configs: List[DimensionPartitionConfig]
+) -> Generator[Tuple[MultiDimensionPartition, List[Dict[str, Any]]], None, None]:
+    """Handle case where all dimensions are range-based"""
+    
+    # Group data by range combinations
+    range_groups = {}
+    
     for row in data:
-        dimension_value = []
-        for dimension_config in dimension_configs:
-            dimension_value.append(build_dimension_range_from_value(row[dimension_config.column], dimension_config))
-        dimension_values.append(dimension_value)
-    # group the data by dimension values of type range
-    grouped_data = {}
-    dim_len = len(dimension_configs)
-    dim_type = [dimension_config.type for dimension_config  in dimension_configs]
-    # import pdb; pdb.set_trace()
-    for row in dimension_values:
-        key = tuple(y for x in row if isinstance(x, tuple) for y in x)
-        if key not in grouped_data:
-            grouped_data[key] = [None]*dim_len
-            for i in range(dim_len):
-                if dim_type[i] == "value":
-                    grouped_data[key][i] = []
-                else:
-                    grouped_data[key][i] = row[i]
-        for i in range(dim_len):
-            if dim_type[i] == "value":
-                grouped_data[key][i].append(row[i])
-    # import pdb; pdb.set_trace()
-    for key, dim_value in grouped_data.items():
-        dimension_partitions = {}
-        # currently assuming only one range dimension and one value dimension. 
-        # It supports not but might make unnecessary partitions.
-        # @TODO: support multiple range and value dimensions
-        for i, dimension_config in enumerate(dimension_configs):
-            if dimension_config.type == "value":
-                dimension_partitions[dimension_config.column] = list(generate_dimension_partitions(dimension_config, dim_value[i], None, bounded=True))
-            elif dimension_config.type == "range":
-                dimension_partitions[dimension_config.column] = list(generate_dimension_partitions(dimension_config, dim_value[i][0], dim_value[i][1], bounded=True))
-        yield from _create_partition_combinations(dimension_partitions, dimension_configs, level=0, parent_partition=None)
+        range_key = []
+        for range_config in range_configs:
+            range_value = build_dimension_range_from_value(row[range_config.column], range_config)
+            range_key.append(range_value)
+        range_key = tuple(range_key)
+        
+        if range_key not in range_groups:
+            range_groups[range_key] = []
+        range_groups[range_key].append(row)
+    
+    # Create partitions for each range group
+    for range_key, group_rows in range_groups.items():
+        range_dimensions = []
+        for i, range_config in enumerate(range_configs):
+            start, end = range_key[i]
+            range_dimensions.append(DimensionPartition(
+                start=start,
+                end=end,
+                column=range_config.column,
+                data_type=range_config.data_type,
+                type="range",
+                partition_id=f"r{i}"
+            ))
+        
+        partition = MultiDimensionPartition(
+            dimensions=range_dimensions,
+            level=0,
+            num_rows=len(group_rows)
+        )
+        yield (partition, group_rows)
 
 
+def _build_value_only_partitions_simple(
+    data: List[Dict[str, Any]], 
+    value_configs: List[DimensionPartitionConfig]
+) -> Generator[Tuple[MultiDimensionPartition, List[Dict[str, Any]]], None, None]:
+    """Handle case where all dimensions are value-based"""
+    
+    # Collect all unique value combinations and group data by them
+    value_groups = {}
+    
+    for row in data:
+        value_key = tuple(row[dim.column] for dim in value_configs)
+        if value_key not in value_groups:
+            value_groups[value_key] = []
+        value_groups[value_key].append(row)
+    
+    # Determine maximum tuples per partition based on minimum step across dimensions
+    max_tuples_per_partition = _get_max_tuples_per_partition(value_configs)
+    
+    # Group unique combinations into partitions based on step limit
+    unique_combinations = list(value_groups.keys())
+    
+    if max_tuples_per_partition == -1:
+        # Unlimited - single partition with all combinations
+        partition_groups = [unique_combinations]
+    else:
+        # Split into chunks based on step limit
+        partition_groups = []
+        for i in range(0, len(unique_combinations), max_tuples_per_partition):
+            partition_groups.append(unique_combinations[i:i + max_tuples_per_partition])
+    
+    # Create partitions for each group
+    for partition_idx, combination_group in enumerate(partition_groups):
+        # Create DimensionPartition objects for value dimensions
+        value_dimensions = []
+        for dim_idx, value_config in enumerate(value_configs):
+            # Extract unique values for this dimension from the combination group
+            dim_values = list(set(combo[dim_idx] for combo in combination_group))
+            
+            # Create a value-type DimensionPartition
+            value_dimensions.append(DimensionPartition(
+                start=None,
+                end=None,
+                column=value_config.column,
+                data_type=value_config.data_type,
+                type="value",
+                value=dim_values,  # Store the discrete values
+                partition_id=f"v{dim_idx}_{partition_idx}"
+            ))
+        
+        # Find all data rows that match this partition's combinations
+        partition_data = []
+        combination_set = set(combination_group)
+        for row in data:
+            row_combo = tuple(row[dim.column] for dim in value_configs)
+            if row_combo in combination_set:
+                partition_data.append(row)
+        
+        partition = MultiDimensionPartition(
+            dimensions=value_dimensions,
+            level=0,
+            num_rows=len(partition_data)
+        )
+        yield (partition, partition_data)
+
+
+def _build_mixed_partitions_simple(
+    data: List[Dict[str, Any]], 
+    range_configs: List[DimensionPartitionConfig],
+    value_configs: List[DimensionPartitionConfig]
+) -> Generator[Tuple[MultiDimensionPartition, List[Dict[str, Any]]], None, None]:
+    """Handle mixed range and value dimensions"""
+    
+    # Group by range dimensions first
+    range_groups = {}
+    
+    for row in data:
+        # Build range key
+        range_key = []
+        for range_config in range_configs:
+            range_value = build_dimension_range_from_value(row[range_config.column], range_config)
+            range_key.append(range_value)
+        range_key = tuple(range_key)
+        
+        if range_key not in range_groups:
+            range_groups[range_key] = []
+        range_groups[range_key].append(row)
+    
+    # Create partitions for each range group
+    for range_key, group_rows in range_groups.items():
+        # Create range dimensions
+        range_dimensions = []
+        for i, range_config in enumerate(range_configs):
+            start, end = range_key[i]
+            range_dimensions.append(DimensionPartition(
+                start=start,
+                end=end,
+                column=range_config.column,
+                data_type=range_config.data_type,
+                type="range",
+                partition_id=f"r{i}"
+            ))
+        
+        # Collect unique value combinations within this range group
+        value_groups = {}
+        for row in group_rows:
+            value_combo = tuple(row[dim.column] for dim in value_configs)
+            if value_combo not in value_groups:
+                value_groups[value_combo] = []
+            value_groups[value_combo].append(row)
+        
+        # Create value partitions respecting step limits
+        if value_groups:
+            max_tuples_per_partition = _get_max_tuples_per_partition(value_configs)
+            unique_combinations = list(value_groups.keys())
+            
+            if max_tuples_per_partition == -1:
+                # Unlimited - single partition
+                combination_groups = [unique_combinations]
+            else:
+                # Split into chunks based on step limit
+                combination_groups = []
+                for i in range(0, len(unique_combinations), max_tuples_per_partition):
+                    combination_groups.append(unique_combinations[i:i + max_tuples_per_partition])
+            
+            # Create a partition for each combination group
+            for group_idx, combination_group in enumerate(combination_groups):
+                # Create value dimensions
+                value_dimensions = []
+                for dim_idx, value_config in enumerate(value_configs):
+                    # Extract unique values for this dimension from the combination group
+                    dim_values = list(set(combo[dim_idx] for combo in combination_group))
+                    
+                    value_dimensions.append(DimensionPartition(
+                        start=None,
+                        end=None,
+                        column=value_config.column,
+                        data_type=value_config.data_type,
+                        type="value",
+                        value=dim_values,
+                        partition_id=f"v{dim_idx}_{group_idx}"
+                    ))
+                
+                # Combine range and value dimensions
+                all_dimensions = range_dimensions + value_dimensions
+                
+                # Find all rows in this range group that match this combination group
+                combination_set = set(combination_group)
+                partition_rows = []
+                for row in group_rows:
+                    row_value_combo = tuple(row[dim.column] for dim in value_configs)
+                    if row_value_combo in combination_set:
+                        partition_rows.append(row)
+                
+                partition = MultiDimensionPartition(
+                    dimensions=all_dimensions,
+                    level=0,
+                    num_rows=len(partition_rows)
+                )
+                yield (partition, partition_rows)
+
+
+def _get_max_tuples_per_partition(dimension_configs: List[DimensionPartitionConfig]) -> int:
+    """
+    Determine the maximum number of tuples per partition based on dimension step configurations.
+    
+    Rules:
+    - step = -1 means unlimited tuples per partition
+    - step > 0 means max 'step' tuples per partition
+    - For multiple dimensions, use the minimum step to prevent long IN queries
+    
+    Returns:
+    - -1 for unlimited
+    - positive integer for the maximum tuples per partition
+    """
+    steps = [dim.step for dim in dimension_configs if dim.step != -1]
+    
+    if not steps:
+        # All dimensions have step = -1, so unlimited
+        return -1
+    
+    # Use minimum step to be most restrictive (prevent very long IN queries)
+    return min(steps)
 
 
 # class MultiDimensionalPartitionGenerator:

@@ -67,7 +67,7 @@ class PipelineBuilder:
         from .stages.populate import PopulateStage
         from .stages.partition import PartitionStage
         from .stages.dedup import DedupStage
-
+        from .stages.join import JoinStage
         
         pipeline = Pipeline(pipeline_config, self.logger)
         
@@ -154,6 +154,16 @@ class PipelineBuilder:
                     pipeline.add_stage(stage)
             elif stage_config.type == 'populate':
                 stage = PopulateStage(
+                    self.sync_engine,
+                    stage_config,
+                    pipeline_config,
+                    self.logger,
+                    self.data_storage,
+                    self.progress_manager
+                )
+                pipeline.add_stage(stage)
+            elif stage_config.type == 'join':
+                stage = JoinStage(
                     self.sync_engine,
                     stage_config,
                     pipeline_config,

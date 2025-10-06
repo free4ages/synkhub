@@ -189,19 +189,19 @@ class PostgresBackend(SqlBackend):
         # print(sql, params)
         return await self.execute_query(sql, params)
     
-    async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Fetch data based on partition bounds with optional pagination"""
+    # async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Fetch data based on partition bounds with optional pagination"""
 
-        if not self.column_schema or not self.column_schema.delta_column:
-            raise ValueError("No delta key configured in column schema")
-        if page_size is not None or offset is not None:
-            order_by = [f"{c.expr} {d}" for c,d in self.column_schema.order_columns] if self.column_schema.order_columns else [f"{self.column_schema.partition_column.expr} asc"]
-        else:
-            order_by = None
-        partition_column = self.column_schema.delta_column.name
-        query = self._build_partition_data_query(partition, partition_column=partition_column, order_by=order_by, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
-        sql, params = self._build_sql(query)
-        return await self.execute_query(sql, params)
+    #     if not self.column_schema or not self.column_schema.delta_column:
+    #         raise ValueError("No delta key configured in column schema")
+    #     if page_size is not None or offset is not None:
+    #         order_by = [f"{c.expr} {d}" for c,d in self.column_schema.order_columns] if self.column_schema.order_columns else [f"{self.column_schema.partition_column.expr} asc"]
+    #     else:
+    #         order_by = None
+    #     partition_column = self.column_schema.delta_column.name
+    #     query = self._build_partition_data_query(partition, partition_column=partition_column, order_by=order_by, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
+    #     sql, params = self._build_sql(query)
+    #     return await self.execute_query(sql, params)
     
     # async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None, skip_cache=False) -> List[Dict]:
     #     """Fetch partition row hashes from destination along with state columns"""
@@ -236,39 +236,39 @@ class PostgresBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Direct database fetch for partition row hashes - used by HashCache"""
-        return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo, page_size=page_size, offset=offset)
+    # async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Direct database fetch for partition row hashes - used by HashCache"""
+    #     return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo, page_size=page_size, offset=offset)
     
-    def mark_partition_complete(self, partition_id: str):
-        """Mark partition as complete and evict from cache"""
-        if self.hash_cache:
-            self.hash_cache.mark_partition_complete(partition_id)
+    # def mark_partition_complete(self, partition_id: str):
+    #     """Mark partition as complete and evict from cache"""
+    #     if self.hash_cache:
+    #         self.hash_cache.mark_partition_complete(partition_id)
     
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get hash cache statistics"""
-        if self.hash_cache:
-            return self.hash_cache.get_cache_stats()
-        else:
-            return {}
+    # def get_cache_stats(self) -> Dict[str, Any]:
+    #     """Get hash cache statistics"""
+    #     if self.hash_cache:
+    #         return self.hash_cache.get_cache_stats()
+    #     else:
+    #         return {}
     
-    def clear_cache(self):
-        """Clear the hash cache"""
-        if self.hash_cache:
-            self.hash_cache.clear_cache()
+    # def clear_cache(self):
+    #     """Clear the hash cache"""
+    #     if self.hash_cache:
+    #         self.hash_cache.clear_cache()
     
-    async def fetch_row_hashes(self, unique_column_values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Fetch row hashes for specific unique key values from cache if possible"""
-        if not self.column_schema:
-            return []
+    # async def fetch_row_hashes(self, unique_column_values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #     """Fetch row hashes for specific unique key values from cache if possible"""
+    #     if not self.column_schema:
+    #         return []
         
-        unique_columns = [col.name for col in self.column_schema.unique_columns] if self.column_schema.unique_columns else []
-        partition_column = self.column_schema.partition_column.name if self.column_schema.partition_column else ""
-        partition_column_type = str(self.column_schema.partition_column.data_type) if self.column_schema.partition_column else ""
+    #     unique_columns = [col.name for col in self.column_schema.unique_columns] if self.column_schema.unique_columns else []
+    #     partition_column = self.column_schema.partition_column.name if self.column_schema.partition_column else ""
+    #     partition_column_type = str(self.column_schema.partition_column.data_type) if self.column_schema.partition_column else ""
         
-        # This would need intervals from the partition context - for now return empty
-        # In practice, this would be called with proper context from partition processor
-        return []
+    #     # This would need intervals from the partition context - for now return empty
+    #     # In practice, this would be called with proper context from partition processor
+    #     return []
     
     async def delete_partition_data(self, partition: MultiDimensionPartition) -> int:
         """Delete partition data from destination"""
@@ -282,18 +282,18 @@ class PostgresBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params, action='delete')
     
-    async def delete_rows(self, rows: List[Dict], partition: MultiDimensionPartition, strategy_config: StrategyConfig) -> int:
-        """Delete rows from destination"""
-        filters = self._build_filter_query()
-        unique_columns = self.column_schema.unique_columns
-        unique_columns_values = [tuple(row[key] for key in unique_columns) for row in rows]
-        filters += [
-            Filter(column=self.column_schema.column(key).expr, operator='in', value=unique_columns_values)
-            for key in unique_columns
-        ]
-        query = Query(action='delete', table=self._build_table_query(), filters=filters)
-        sql, params = self._build_sql(query)
-        return await self.execute_query(sql, params)
+    # async def delete_rows(self, rows: List[Dict], partition: MultiDimensionPartition, strategy_config: StrategyConfig) -> int:
+    #     """Delete rows from destination"""
+    #     filters = self._build_filter_query()
+    #     unique_columns = self.column_schema.unique_columns
+    #     unique_columns_values = [tuple(row[key] for key in unique_columns) for row in rows]
+    #     filters += [
+    #         Filter(column=self.column_schema.column(key).expr, operator='in', value=unique_columns_values)
+    #         for key in unique_columns
+    #     ]
+    #     query = Query(action='delete', table=self._build_table_query(), filters=filters)
+    #     sql, params = self._build_sql(query)
+    #     return await self.execute_query(sql, params)
         
     # async def insert_partition_data(
     #     self,
@@ -304,9 +304,9 @@ class PostgresBackend(SqlBackend):
     # ) -> int:      
     #     return await self.insert_data(data, partition, batch_size, upsert=upsert)
     
-    async def fetch_partition_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch partition row hashes from destination along with state columns"""
-        return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo)
+    # async def fetch_partition_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    #     """Fetch partition row hashes from destination along with state columns"""
+    #     return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo)
     
     # async def insert_delta_data(
     #     self,
@@ -320,10 +320,12 @@ class PostgresBackend(SqlBackend):
     async def delete_partition_data(self, partition: Optional[MultiDimensionPartition] = None) -> int:
         """Delete partition data from destination"""
         filters = self._build_filter_query()
-        filters += [
-            Filter(column=self.column_mapping.partition_column, operator='>=', value=partition.start), 
-            Filter(column=self.column_mapping.partition_column, operator='<', value=partition.end)
-        ]
+        partition_filters = self.build_partition_filter_query(partition)
+        filters.extend(partition_filters)
+        # filters += [
+        #     Filter(column=self.column_mapping.partition_column, operator='>=', value=partition.start), 
+        #     Filter(column=self.column_mapping.partition_column, operator='<', value=partition.end)
+        # ]
         query = Query(action='delete', table=self._build_table_query(), filters=filters)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)    
@@ -506,14 +508,15 @@ class PostgresBackend(SqlBackend):
         ]
         grp_field = Field(expr="partition_id", type="column")
 
-        partition_bounds = partition.get_partition_bounds()
-        filters = []
-        for bound in partition_bounds:
-            column = self.db_column_schema.column(bound.column)
-            filters += [
-                Filter(column=column.expr, operator='>=', value=column.cast(bound.start)), 
-                Filter(column=column.expr, operator='<', value=column.cast(bound.end))
-            ]
+        # partition_bounds = partition.get_partition_bounds()
+        filters = self.build_partition_filter_query(partition)
+        # filters = []
+        # for bound in partition_bounds:
+        #     column = self.db_column_schema.column(bound.column)
+        #     filters += [
+        #         Filter(column=column.expr, operator='>=', value=column.cast(bound.start)), 
+        #         Filter(column=column.expr, operator='<', value=column.cast(bound.end))
+        #     ]
         # if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
         #     filters += [
         #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
@@ -536,7 +539,7 @@ class PostgresBackend(SqlBackend):
         #     ]
         # else:
         #     raise ValueError(f"Unsupported partition type: {partition_column_type}")
-        filters += self._build_filter_query()
+        filters.extend(self._build_filter_query())
         query = Query(
             select=select,
             table=self._build_table_query(),

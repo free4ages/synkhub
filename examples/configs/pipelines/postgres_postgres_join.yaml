@@ -1,5 +1,6 @@
 name: 'postgres_postgres_small_delete'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
+sync_type: 'row-level'
 
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
@@ -36,13 +37,15 @@ strategies:
     default: true
     enabled: true
     primary_partitions:
-      - column: 'user_id'
-        step: 100
-        data_type: 'integer'
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+        data_type: 'datetime'
     secondary_partitions:
-      - column: 'user_id'
-        step: 10
-        data_type: 'integer'
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+        data_type: 'datetime'
     max_concurrent_partitions: 1
     cron: '0 */2 * * *'  # Every 2 hours
     page_size: 10
@@ -56,13 +59,15 @@ strategies:
     default: true
     enabled: true
     primary_partitions:
-      - column: 'user_id'
-        step: 100
-        data_type: 'integer'
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+        data_type: 'datetime'
     secondary_partitions:
-      - column: 'user_id'
-        step: 10
-        data_type: 'integer'
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+        data_type: 'datetime'
     max_concurrent_partitions: 1
     page_size: 10
     cron: '0 3 * * *'  # Daily at 3 AM
@@ -107,73 +112,128 @@ backends:
   - name: 'source_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
-    table: 'users_small'
-    alias: 'u'
+    table: 'orders'
     schema: 'public'
-    join:
-      - table: 'user_profiles_small'
-        alias: 'p'
-        'on': 'u.id = p.user_id'
-        type: 'left'
+    # join:
+    #   - table: 'user_profiles_small'
+    #     alias: 'p'
+    #     'on': 'u.id = p.user_id'
+    #     type: 'left'
     filters: 
       - column: 'u.deleted'
         operator: '='
         value: false
     columns:
-      - name: 'user_id'
-        expr: 'u.id'
+      - name: 'order_id'
+        expr: 'id'
         order_column: true
         direction: 'asc'
         data_type: 'integer'
-      - name: 'uid'
-        expr: 'u.uid'
+      - name: 'order_date'
+        data_type: 'datetime'
+      - name: 'user_id'
+        data_type: 'integer'
+      - name: 'product_id'
+        data_type: 'integer'
+      - name: 'quantity'
+        data_type: 'integer'
+      - name: 'price'
+        data_type: 'decimal'
+      - name: 'amount'
+        data_type: 'decimal'
+      - name: 'discount'
+        data_type: 'decimal'
+      - name: 'category'
         data_type: 'uuid'
-      - name: 'updated_at'
-        expr: 'u.updated_at'
+      - name: 'source_created_at'
+        expr: 'created_at'
         data_type: 'datetime'
-      - name: 'first_name'
-        expr: 'u.first_name'
-        data_type: 'varchar'
-      - name: 'last_name'
-        expr: 'u.last_name'
-        data_type: 'varchar'
-      - name: 'email'
-        expr: 'p.email'
-        data_type: 'varchar'
-      - name: 'status'
-        expr: 'u.status'
-        data_type: 'varchar'
-      - name: 'created_at'
-        expr: 'u.created_at'
-        data_type: 'datetime'
-      - name: 'updated_at'
-        expr: 'u.updated_at'
+      - name: 'source_updated_at'
+        expr: 'updated_at'
         data_type: 'datetime'
   - name: 'destination_backend'
     type: 'postgres'
     datastore_name: 'local_postgres'
-    table: 'user_profile_small'
+    table: 'orders'
     schema: 'public_copy'
     columns:
-      - name: 'user_id'
+      - name: 'order_id'
         unique_column: true
         data_type: 'integer'
-      - name: 'uid'
-        data_type: 'uuid_text_dash'
-      - name: 'updated_at'
-        expr: 'source_updated_at'
+      - name: 'order_date'
         data_type: 'datetime'
-      - name: 'created_at'
-        expr: 'source_created_at'
-        data_type: 'datetime'
-      - name: 'name'
-        data_type: 'varchar'
-      - name: 'checksum_int'
+      - name: 'user_id'
         data_type: 'integer'
-        hash_key: true
-      - name: 'status'
+      - name: 'product_id'
+        data_type: 'integer'
+      - name: 'quantity'
+        data_type: 'integer'
+      - name: 'price'
+        data_type: 'decimal'
+      - name: 'amount'
+        data_type: 'decimal'
+      - name: 'discount'
+        data_type: 'decimal'
+      - name: 'category'
+        data_type: 'uuid'
+      - name: 'source_created_at'
+        data_type: 'datetime'
+      - name: 'source_updated_at'
+        data_type: 'datetime'
+      - name: 'user_email'
         data_type: 'varchar'
-      - name: 'email'
+      - name: 'user_name'
+        data_type: 'varchar'
+      - name: 'product_name'
+        data_type: 'varchar'
+      - name: 'category_name'
+        data_type: 'varchar'
+  - name: 'user_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'users_small'
+    schema: 'public'
+    columns:
+      - name: 'user_id'
+        data_type: 'integer'
+      - name: 'first_name'
+        data_type: 'varchar'
+      - name: 'last_name'
+        data_type: 'varchar'
+  - name: 'user_detail_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'user_profiles_small'
+    schema: 'public'
+    columns:
+      - name: 'user_id'
+        data_type: 'integer'
+      - name: 'user_email'
+        expr: 'email'
+        data_type: 'varchar'
+  - name: 'product_detail_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'product'
+    schema: 'public'
+    columns:
+      - name: 'product_id'
+        expr: 'id'
+        data_type: 'integer'
+      - name: 'product_name'
+        expr: 'name'
+        data_type: 'varchar'
+  - name: 'category_detail_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'category'
+    schema: 'public'
+    columns:
+      - name: 'category_id'
+        expr: 'id'
+        data_type: 'uuid'
+      - name: 'category_name'
+        expr: 'name'
         data_type: 'varchar'
 stages:
   - name: 'partition_generator'
@@ -202,6 +262,17 @@ stages:
     enabled: true
     config:
       target_batch_size: 10
+  - name: 'join_user'
+    type: 'join'
+    enabled: true
+    source:
+      name: join_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'user_id'
+          backend_key: 'user_id'
+          operator: '='
   - name: 'transformation'
     type: 'transform'
     enabled: true

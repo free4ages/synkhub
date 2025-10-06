@@ -196,6 +196,7 @@ def calculate_partition_status(src_partitions: List[Dict[str, Any]], snk_partiti
             status[key] = DataStatus.ADDED
         else:
             status[key] = DataStatus.DELETED
+        sel["count_diff"] = sc["num_rows"] - kc["num_rows"]
         result.append(sel)
     return result, status
 
