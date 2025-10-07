@@ -134,7 +134,7 @@ backends:
       - name: 'num_orders'
         data_type: 'integer'
       - name: 'checksum_int'
-        data_type: 'integer'
+        data_type: 'bigint'
         hash_key: true
       - name: 'order_date'
         expr: 'date'

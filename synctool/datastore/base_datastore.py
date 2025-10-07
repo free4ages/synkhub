@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Union
 
 from ..core.models import ConnectionConfig
+from ..core.schema_models import UniversalSchema, UniversalDataType
 
 
 class BaseDatastore(ABC):
@@ -148,3 +149,103 @@ class BaseDatastore(ABC):
         if not hasattr(self, '_http_session') or not self._http_session:
             raise RuntimeError(f"Datastore {self.name} does not support HTTP sessions")
         return self._http_session
+    
+    # Schema management methods
+    
+    @abstractmethod
+    async def table_exists(self, table_name: str, schema_name: Optional[str] = None) -> bool:
+        """
+        Check if a table exists in the datastore.
+        
+        Args:
+            table_name: Name of the table
+            schema_name: Optional schema/database name
+            
+        Returns:
+            True if table exists, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    async def extract_table_schema(self, table_name: str, schema_name: Optional[str] = None) -> UniversalSchema:
+        """
+        Extract table schema in universal format.
+        
+        Args:
+            table_name: Name of the table
+            schema_name: Optional schema/database name
+            
+        Returns:
+            UniversalSchema object with table metadata
+            
+        Raises:
+            Exception: If table doesn't exist or cannot be accessed
+        """
+        pass
+    
+    @abstractmethod
+    def generate_create_table_ddl(
+        self, 
+        schema: UniversalSchema, 
+        target_table_name: Optional[str] = None,
+        if_not_exists: bool = False
+    ) -> str:
+        """
+        Generate CREATE TABLE DDL for this database type.
+        
+        Args:
+            schema: UniversalSchema object
+            target_table_name: Optional override for table name
+            if_not_exists: Add IF NOT EXISTS clause
+            
+        Returns:
+            CREATE TABLE DDL statement
+        """
+        pass
+    
+    @abstractmethod
+    def generate_alter_table_ddl(
+        self,
+        table_name: str,
+        changes: List[Dict[str, Any]],
+        schema_name: Optional[str] = None
+    ) -> List[str]:
+        """
+        Generate ALTER TABLE DDL statements.
+        
+        Args:
+            table_name: Name of the table
+            changes: List of change specifications with format:
+                     {'type': 'add_column'|'modify_column'|'drop_column', 'column': UniversalColumn, ...}
+            schema_name: Optional schema/database name
+            
+        Returns:
+            List of ALTER TABLE DDL statements
+        """
+        pass
+    
+    @abstractmethod
+    def map_source_type_to_universal(self, source_type: str) -> UniversalDataType:
+        """
+        Map database-specific type to universal type.
+        
+        Args:
+            source_type: Database-specific type name (e.g., 'varchar', 'int')
+            
+        Returns:
+            UniversalDataType enum value
+        """
+        pass
+    
+    @abstractmethod
+    def map_universal_type_to_target(self, universal_type: UniversalDataType) -> str:
+        """
+        Map universal type to database-specific type.
+        
+        Args:
+            universal_type: UniversalDataType enum value
+            
+        Returns:
+            Database-specific type name (e.g., 'VARCHAR(255)', 'INTEGER')
+        """
+        pass

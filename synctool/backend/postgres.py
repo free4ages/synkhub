@@ -754,163 +754,33 @@ class PostgresBackend(SqlBackend):
 
         return success, failed
     
-    # Schema extraction and DDL generation methods  
+    # Schema extraction and DDL generation methods - delegate to datastore
     async def extract_table_schema(self, table_name: str) -> UniversalSchema:
-        """Extract PostgreSQL table schema"""
-        schema_name = self.schema or 'public'
-        full_table = f"{schema_name}.{table_name}"
-        
-        # Get column information
-        columns_query = """
-        SELECT 
-            column_name,
-            data_type,
-            character_maximum_length,
-            is_nullable,
-            column_default,
-            ordinal_position,
-            is_identity
-        FROM information_schema.columns 
-        WHERE table_schema = $1 AND table_name = $2
-        ORDER BY ordinal_position
-        """
-        columns_data = await self.execute_query(columns_query, [schema_name, table_name])
-        
-        # Get primary key information
-        pk_query = """
-        SELECT kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu 
-            ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.constraint_type = 'PRIMARY KEY' 
-            AND tc.table_schema = $1 
-            AND tc.table_name = $2
-        """
-        pk_result = await self.execute_query(pk_query, [schema_name, table_name])
-        primary_keys = [row['column_name'] for row in pk_result]
-        
-        # Get index information
-        indexes_query = """
-        SELECT 
-            indexname,
-            indexdef
-        FROM pg_indexes 
-        WHERE schemaname = $1 AND tablename = $2
-        """
-        indexes = await self.execute_query(indexes_query, [schema_name, table_name])
-        
-        # Convert to universal format
-        columns = []
-        for col_data in columns_data:
-            universal_type = self.map_source_type_to_universal(col_data['data_type'])
-            
-            column = UniversalColumn(
-                name=col_data['column_name'],
-                data_type=universal_type,
-                nullable=col_data['is_nullable'] == 'YES',
-                primary_key=col_data['column_name'] in primary_keys,
-                unique=False,  # Would need additional query for unique constraints
-                auto_increment=col_data['is_identity'] == 'YES',
-                default_value=col_data['column_default'],
-                max_length=col_data['character_maximum_length']
-            )
-            columns.append(column)
-        
-        return UniversalSchema(
-            table_name=table_name,
-            schema_name=schema_name,
-            database_name=self.connection_config.database,
-            columns=columns,
-            primary_keys=primary_keys,
-            indexes=indexes
+        """Extract table schema - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return await self._datastore._datastore_impl.extract_table_schema(
+            table_name, 
+            self.schema
         )
     
     def generate_create_table_ddl(self, schema: UniversalSchema, target_table_name: Optional[str] = None) -> str:
-        """Generate PostgreSQL CREATE TABLE DDL"""
-        table_name = target_table_name or schema.table_name
-        if schema.schema_name:
-            table_name = f"{schema.schema_name}.{table_name}"
-        
-        columns = []
-        for col in schema.columns:
-            col_def = f"{col.name} {self.map_universal_type_to_target(col.data_type)}"
-            
-            if not col.nullable:
-                col_def += " NOT NULL"
-            
-            if col.default_value:
-                col_def += f" DEFAULT {col.default_value}"
-            
-            columns.append(col_def)
-        
-        # Add primary key constraint
-        if schema.primary_keys:
-            pk_columns = ', '.join(schema.primary_keys)
-            columns.append(f"PRIMARY KEY ({pk_columns})")
-        
-        return f"""CREATE TABLE {table_name} (
-  {', '.join(columns)}
-);"""
+        """Generate DDL - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return self._datastore._datastore_impl.generate_create_table_ddl(
+            schema, 
+            target_table_name
+        )
     
     def map_source_type_to_universal(self, source_type: str) -> UniversalDataType:
-        """Map PostgreSQL type to universal type"""
-        type_mapping = {
-            'integer': UniversalDataType.INTEGER,
-            'int': UniversalDataType.INTEGER,
-            'bigint': UniversalDataType.BIGINT,
-            'smallint': UniversalDataType.SMALLINT,
-            'serial': UniversalDataType.INTEGER,  # Auto-incrementing integer
-            'bigserial': UniversalDataType.BIGINT,  # Auto-incrementing bigint
-            'smallserial': UniversalDataType.SMALLINT,  # Auto-incrementing smallint
-            'real': UniversalDataType.FLOAT,
-            'double precision': UniversalDataType.DOUBLE,
-            'numeric': UniversalDataType.DECIMAL,
-            'decimal': UniversalDataType.DECIMAL,
-            'varchar': UniversalDataType.VARCHAR,
-            'character varying': UniversalDataType.VARCHAR,  # PostgreSQL's actual VARCHAR type
-            'text': UniversalDataType.TEXT,
-            'char': UniversalDataType.CHAR,
-            'character': UniversalDataType.CHAR,  # PostgreSQL's actual CHAR type
-            'date': UniversalDataType.DATE,
-            'time': UniversalDataType.TIME,
-            'timestamp': UniversalDataType.TIMESTAMP,
-            'timestamp without time zone': UniversalDataType.TIMESTAMP,
-            'timestamp with time zone': UniversalDataType.TIMESTAMP,
-            'timestamptz': UniversalDataType.TIMESTAMP,
-            'datetime': UniversalDataType.DATETIME,
-            'boolean': UniversalDataType.BOOLEAN,
-            'bool': UniversalDataType.BOOLEAN,
-            'bytea': UniversalDataType.BLOB,
-            'json': UniversalDataType.JSON,
-            'jsonb': UniversalDataType.JSON,
-            'uuid': UniversalDataType.UUID,
-        }
-        
-        normalized_type = source_type.lower().strip()
-        
-        # Handle types with precision/scale (e.g., timestamp(6), varchar(255))
-        base_type = normalized_type.split('(')[0] if '(' in normalized_type else normalized_type
-        return type_mapping.get(base_type, UniversalDataType.TEXT)
+        """Map type - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return self._datastore._datastore_impl.map_source_type_to_universal(source_type)
     
     def map_universal_type_to_target(self, universal_type: UniversalDataType) -> str:
-        """Map universal type to PostgreSQL type"""
-        type_mapping = {
-            UniversalDataType.INTEGER: 'INTEGER',
-            UniversalDataType.BIGINT: 'BIGINT',
-            UniversalDataType.SMALLINT: 'SMALLINT',
-            UniversalDataType.FLOAT: 'REAL',
-            UniversalDataType.DOUBLE: 'DOUBLE PRECISION',
-            UniversalDataType.DECIMAL: 'NUMERIC',
-            UniversalDataType.VARCHAR: 'VARCHAR(255)',
-            UniversalDataType.TEXT: 'TEXT',
-            UniversalDataType.CHAR: 'CHAR(1)',
-            UniversalDataType.DATE: 'DATE',
-            UniversalDataType.TIME: 'TIME',
-            UniversalDataType.TIMESTAMP: 'TIMESTAMP',
-            UniversalDataType.DATETIME: 'TIMESTAMP',
-            UniversalDataType.BOOLEAN: 'BOOLEAN',
-            UniversalDataType.BLOB: 'BYTEA',
-            UniversalDataType.JSON: 'JSONB',
-            UniversalDataType.UUID: 'UUID',
-        }
-        return type_mapping.get(universal_type, 'TEXT')
+        """Map type - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return self._datastore._datastore_impl.map_universal_type_to_target(universal_type)

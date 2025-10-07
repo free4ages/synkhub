@@ -429,6 +429,10 @@ class Column:
     # partition_column: bool = False
     hash_key: bool = False
     virtual: bool = False
+    # Type-specific attributes
+    max_length: Optional[int] = None  # For VARCHAR, CHAR
+    precision: Optional[int] = None    # For DECIMAL, NUMERIC
+    scale: Optional[int] = None        # For DECIMAL, NUMERIC
     
     def cast(self, value: Any) -> Any:
         if not self.data_type:

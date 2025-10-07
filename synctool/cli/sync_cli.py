@@ -20,6 +20,7 @@ from ..config.config_manager import ConfigManager
 from ..monitoring.metrics_storage import MetricsStorage
 from ..monitoring.logs_storage import LogsStorage
 from ..sync.sync_job_manager import SyncJobManager
+from ..utils.schema_manager import SchemaManager
 
 
 class SyncCLI:
@@ -382,6 +383,132 @@ class SyncCLI:
             self.logger.error(f"Error listing jobs from ConfigManager: {e}")
         finally:
             await config_manager.close()
+    
+    async def generate_ddl(self, args):
+        """Generate DDL for populate stage destination table"""
+        self.logger.info(f"Generating DDL for job: {args.job_name}")
+        
+        # Load configuration
+        if args.config_store_type == 'file' or not args.config_store_type:
+            job_config, data_storage = await self._load_config_from_file(args)
+        else:
+            job_config, data_storage = await self._load_config_from_manager(args)
+        
+        if not job_config or not data_storage:
+            self.logger.error("Failed to load configuration")
+            sys.exit(1)
+        
+        # Find the populate stage (auto-detect)
+        populate_stages = [stage for stage in job_config.stages if stage.type == 'populate']
+        
+        if not populate_stages:
+            self.logger.error(f"No populate stage found in job '{args.job_name}'")
+            sys.exit(1)
+        
+        if len(populate_stages) > 1:
+            stage_names = [s.name for s in populate_stages]
+            self.logger.error(f"Multiple populate stages found in job '{args.job_name}': {stage_names}")
+            self.logger.error("Please ensure only one populate stage per pipeline")
+            sys.exit(1)
+        
+        stage_config = populate_stages[0]
+        self.logger.info(f"Found populate stage: {stage_config.name}")
+        
+        if not stage_config.destination:
+            self.logger.error(f"No destination configured for stage '{stage_config.name}'")
+            sys.exit(1)
+        
+        if not stage_config.destination.datastore_name:
+            self.logger.error(f"No datastore configured for destination in stage '{stage_config.name}'")
+            sys.exit(1)
+        # Get datastore directly
+        datastore = data_storage.get_datastore(stage_config.destination.datastore_name)
+        if not datastore:
+            self.logger.error(f"Datastore '{stage_config.destination.datastore_name}' not found")
+            sys.exit(1)
+        
+        await datastore.connect(self.logger)
+        
+        try:
+            # Use SchemaManager with datastore
+            schema_manager = SchemaManager(self.logger)
+            
+            # Check if we should auto-apply (--yes or --apply flags)
+            auto_apply = args.yes or args.apply
+            
+            # First, always generate DDL without applying to show the user
+            result = await schema_manager.ensure_table_schema(
+                datastore=datastore,
+                columns=stage_config.destination.columns,
+                table_name=stage_config.destination.table,
+                schema_name=stage_config.destination.schema,
+                apply=False,  # Always preview first
+                if_not_exists=args.if_not_exists
+            )
+            
+            # Output results
+            print(f"\n{'='*80}")
+            print(f"Job: {args.job_name}")
+            print(f"Stage: {stage_config.name}")
+            print(f"Table: {result['table_name']}")
+            print(f"Action: {result['action']}")
+            print(f"Table Exists: {result['table_exists']}")
+            print(f"{'='*80}\n")
+            
+            if result['changes']:
+                print(f"Changes required:")
+                for change in result['changes']:
+                    print(f"  - {change.get('description', change['type'])}")
+                print()
+            
+            if result['ddl_statements']:
+                print(f"DDL Statements:\n")
+                for ddl in result['ddl_statements']:
+                    print(ddl)
+                    print()
+                
+                # Determine whether to apply changes
+                should_apply = False
+                
+                if auto_apply:
+                    # Auto-apply mode (--yes or --apply flag)
+                    should_apply = True
+                    if args.yes:
+                        print("Auto-applying changes (--yes flag)...")
+                    else:
+                        print("Auto-applying changes (--apply flag, consider using --yes)...")
+                else:
+                    # Interactive mode - prompt user
+                    try:
+                        response = input("\nDo you want to apply these changes? (yes/no): ").strip().lower()
+                        should_apply = response in ['yes', 'y']
+                    except (KeyboardInterrupt, EOFError):
+                        print(f"\n\nOperation cancelled by user\n")
+                        should_apply = False
+                
+                # Apply changes if approved
+                if should_apply:
+                    self.logger.info("Applying DDL changes...")
+                    await schema_manager.ensure_table_schema(
+                        datastore=datastore,
+                        columns=stage_config.destination.columns,
+                        table_name=stage_config.destination.table,
+                        schema_name=stage_config.destination.schema,
+                        apply=True,  # Apply changes
+                        if_not_exists=args.if_not_exists
+                    )
+                    print(f"\n✓ DDL applied successfully\n")
+                else:
+                    print(f"\nNo changes applied\n")
+            else:
+                print("No DDL changes required - table schema matches config\n")
+            
+        except Exception as e:
+            self.logger.error(f"Error generating DDL: {e}")
+            traceback.print_exc()
+            sys.exit(1)
+        finally:
+            await datastore.disconnect(self.logger)
 
 
 def main():
@@ -405,6 +532,15 @@ Examples:
 
   # List all available jobs
   python -m synctool.cli.sync_cli list --config-dir ./configs
+
+  # Generate DDL (interactive - prompts for confirmation)
+  python -m synctool.cli.sync_cli generate-ddl --job-name my_job --config-dir ./configs
+
+  # Generate DDL with auto-apply (no prompt - for scripts/CI)
+  python -m synctool.cli.sync_cli generate-ddl --job-name my_job --config-dir ./configs --yes
+
+  # Generate DDL with IF NOT EXISTS
+  python -m synctool.cli.sync_cli generate-ddl --job-name my_job --config-dir ./configs --if-not-exists
 
   # Run a job from database config store
   python -m synctool.cli.sync_cli run --job-name my_job --config-store-type manager --db-type postgres --db-host localhost --db-user synctool --db-password password --db-name synctool_configs
@@ -452,6 +588,24 @@ Examples:
     list_parser.add_argument('--db-password', help='Database password')
     list_parser.add_argument('--db-name', help='Database name')
     
+    # Generate DDL command
+    ddl_parser = subparsers.add_parser('generate-ddl', help='Generate DDL for populate stage destination table (auto-detects populate stage)')
+    ddl_parser.add_argument('--job-name', required=True, help='Name of the job')
+    ddl_parser.add_argument('--apply', action='store_true', help='DEPRECATED: Apply without prompting. Use --yes instead for non-interactive mode')
+    ddl_parser.add_argument('--yes', '-y', action='store_true', help='Automatically approve and apply DDL changes without prompting')
+    ddl_parser.add_argument('--if-not-exists', action='store_true', help='Add IF NOT EXISTS clause for CREATE TABLE')
+    ddl_parser.add_argument('--config-dir', help='Directory containing job configs (for file-based loading)')
+    ddl_parser.add_argument('--config-store-type', choices=['file', 'manager'], default='file',
+                           help='Type of configuration store to use')
+    
+    # Database configuration for DDL generation (config store)
+    ddl_parser.add_argument('--db-type', choices=['postgres', 'mysql'], help='Database type for config store')
+    ddl_parser.add_argument('--db-host', help='Database host for config store')
+    ddl_parser.add_argument('--db-port', type=int, help='Database port for config store')
+    ddl_parser.add_argument('--db-user', help='Database user for config store')
+    ddl_parser.add_argument('--db-password', help='Database password for config store')
+    ddl_parser.add_argument('--db-name', help='Database name for config store')
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -488,6 +642,12 @@ Examples:
                 sys.exit(1)
             
             asyncio.run(cli.list_jobs(args))
+        elif args.command == 'generate-ddl':
+            if args.config_store_type == 'file' and not args.config_dir:
+                print("Error: --config-dir is required for file-based configuration")
+                sys.exit(1)
+            
+            asyncio.run(cli.generate_ddl(args))
         else:
             parser.print_help()
             sys.exit(1)

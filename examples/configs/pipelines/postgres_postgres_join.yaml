@@ -84,13 +84,21 @@ pipeline_columns:
   - name: 'product_id'
     data_type: 'integer'
   - name: 'quantity'
-    data_type: 'integer'
+    data_type: 'decimal'
+    precision: 10
+    scale: 2
   - name: 'price'
     data_type: 'decimal'
+    precision: 10
+    scale: 2
   - name: 'amount'
     data_type: 'decimal'
+    precision: 15
+    scale: 2
   - name: 'discount'
     data_type: 'decimal'
+    precision: 5
+    scale: 2
   - name: 'category'
     data_type: 'uuid'
   - name: 'source_created_at'
@@ -99,26 +107,32 @@ pipeline_columns:
     data_type: 'datetime'
   - name: 'user_email'
     data_type: 'varchar'
+    max_length: 100
   - name: 'user_name'
     data_type: 'varchar'
+    max_length: 200
   - name: 'product_name'
     data_type: 'varchar'
+    max_length: 150
   - name: 'category_name'
     data_type: 'varchar'
+    max_length: 100
   - name: 'first_name'
     data_type: 'varchar'
+    max_length: 50
   - name: 'last_name'
     data_type: 'varchar'
+    max_length: 50
   - name: 'order_hash'
-    data_type: 'integer'
+    data_type: 'bigint'
   - name: 'user_hash'
-    data_type: 'integer'
+    data_type: 'bigint'
   - name: 'user_detail_hash'
-    data_type: 'integer'
+    data_type: 'bigint'
   - name: 'product_hash'
-    data_type: 'integer'
+    data_type: 'bigint'
   - name: 'category_hash'
-    data_type: 'integer'
+    data_type: 'bigint'
 
 backends:
   - name: 'source_backend'

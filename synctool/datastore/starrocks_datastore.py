@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Any, Union
 
 from .base_datastore import BaseDatastore
 from ..core.models import ConnectionConfig
+from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
 
 
 class StarRocksDatastore(BaseDatastore):
@@ -31,7 +32,7 @@ class StarRocksDatastore(BaseDatastore):
         
         # StarRocks-specific connection details
         self.host = connection_config.host or 'localhost'
-        self.port = connection_config.port or 9030
+        self.port = int(connection_config.port or 9030)
         self.http_port = getattr(connection_config, 'http_port', 8030)
         self.user = connection_config.user or 'root'
         self.password = connection_config.password or ''
@@ -56,7 +57,6 @@ class StarRocksDatastore(BaseDatastore):
                 "aiohttp is required for StarRocks HTTP operations. "
                 "Install it with: pip install aiohttp"
             )
-        
         # Create MySQL connection pool
         self._connection_pool = await aiomysql.create_pool(
             host=self.host,
@@ -339,3 +339,267 @@ class StarRocksDatastore(BaseDatastore):
                 raise RuntimeError(f"Stream load failed: {result}")
             
             return result
+    
+    # Schema management methods
+    
+    async def table_exists(self, table_name: str, schema_name: Optional[str] = None) -> bool:
+        """Check if a table exists in StarRocks"""
+        database = schema_name or self.database
+        
+        query = """
+        SELECT COUNT(*) as count
+        FROM information_schema.tables 
+        WHERE table_schema = %s 
+        AND table_name = %s
+        """
+        
+        result = await self.execute_query(query, [database, table_name])
+        return result[0]['count'] > 0 if result else False
+    
+    async def extract_table_schema(self, table_name: str, schema_name: Optional[str] = None) -> UniversalSchema:
+        """Extract StarRocks table schema"""
+        database = schema_name or self.database
+        
+        # Use DESCRIBE to get column information (StarRocks uses MySQL syntax)
+        describe_query = f"DESCRIBE {table_name}"
+        columns_raw = await self.execute_query(describe_query)
+        
+        if not columns_raw:
+            raise ValueError(f"Table {table_name} does not exist or has no columns")
+        
+        columns = []
+        primary_keys = []
+        
+        for col in columns_raw:
+            col_name = col['Field']
+            col_type = col['Type']
+            col_key = col.get('Key', '')
+            col_extra = col.get('Extra', '')
+            
+            universal_type = self.map_source_type_to_universal(col_type)
+            
+            # Check if it's a primary key
+            is_primary_key = col_key == 'PRI'
+            if is_primary_key:
+                primary_keys.append(col_name)
+            
+            # Extract length/precision/scale from type string
+            # e.g., "varchar(100)", "char(36)", "decimal(10,2)"
+            max_length = None
+            precision = None
+            scale = None
+            
+            col_type_lower = col_type.lower()
+            if '(' in col_type_lower:
+                # Extract parameters from type
+                import re
+                match = re.match(r'(\w+)\(([^)]+)\)', col_type_lower)
+                if match:
+                    base_type = match.group(1)
+                    params = match.group(2)
+                    
+                    if base_type in ['varchar', 'char']:
+                        # For VARCHAR/CHAR, it's just the length
+                        max_length = int(params)
+                    elif base_type in ['decimal', 'numeric']:
+                        # For DECIMAL, it's precision,scale
+                        if ',' in params:
+                            prec_scale = params.split(',')
+                            precision = int(prec_scale[0].strip())
+                            scale = int(prec_scale[1].strip())
+                        else:
+                            precision = int(params)
+            
+            column = UniversalColumn(
+                name=col_name,
+                data_type=universal_type,
+                nullable=col['Null'] == 'YES',
+                primary_key=is_primary_key,
+                unique=col_key == 'UNI',
+                auto_increment='auto_increment' in col_extra.lower(),
+                default_value=col.get('Default'),
+                max_length=max_length,
+                precision=precision,
+                scale=scale
+            )
+            columns.append(column)
+        
+        return UniversalSchema(
+            table_name=table_name,
+            database_name=database,
+            columns=columns,
+            primary_keys=primary_keys
+        )
+    
+    def generate_create_table_ddl(
+        self, 
+        schema: UniversalSchema, 
+        target_table_name: Optional[str] = None,
+        if_not_exists: bool = False
+    ) -> str:
+        """Generate StarRocks CREATE TABLE DDL"""
+        table_name = target_table_name or schema.table_name
+        if schema.database_name:
+            table_name = f"`{schema.database_name}`.`{table_name}`"
+        else:
+            table_name = f"`{table_name}`"
+        
+        if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
+        
+        columns = []
+        for col in schema.columns:
+            # Get base type and apply precision/scale/length if applicable
+            col_type = self._get_column_type_with_params(col)
+            col_def = f"`{col.name}` {col_type}"
+            
+            if not col.nullable:
+                col_def += " NOT NULL"
+            
+            if col.default_value and not col.auto_increment:
+                col_def += f" DEFAULT {col.default_value}"
+            
+            columns.append(col_def)
+        
+        # Add primary key constraint if present
+        pk_clause = ""
+        if schema.primary_keys:
+            pk_columns = ', '.join([f"`{pk}`" for pk in schema.primary_keys])
+            columns.append(f"PRIMARY KEY ({pk_columns})")
+        
+        # StarRocks requires ENGINE and distribution spec
+        # Using a simple default - users should customize as needed
+        engine_spec = "ENGINE=OLAP"
+        distribution_spec = ""
+        if schema.primary_keys:
+            distribution_spec = f"DISTRIBUTED BY HASH(`{schema.primary_keys[0]}`) BUCKETS 10"
+        
+        columns_str = ',\n  '.join(columns)
+        ddl = f"""CREATE TABLE {if_not_exists_clause}{table_name} (
+  {columns_str}
+) {engine_spec}"""
+        
+        if distribution_spec:
+            ddl += f"\n{distribution_spec}"
+        
+        ddl += ";"
+        
+        return ddl
+    
+    def generate_alter_table_ddl(
+        self,
+        table_name: str,
+        changes: List[Dict[str, Any]],
+        schema_name: Optional[str] = None
+    ) -> List[str]:
+        """Generate StarRocks ALTER TABLE DDL statements"""
+        full_table = f"`{schema_name}`.`{table_name}`" if schema_name else f"`{table_name}`"
+        ddl_statements = []
+        
+        for change in changes:
+            if change['type'] == 'add_column':
+                col = change['column']
+                col_type = self.map_universal_type_to_target(col.data_type)
+                nullable = "" if col.nullable else " NOT NULL"
+                default = f" DEFAULT {col.default_value}" if col.default_value else ""
+                ddl = f"ALTER TABLE {full_table} ADD COLUMN `{col.name}` {col_type}{default}{nullable};"
+                ddl_statements.append(ddl)
+            
+            elif change['type'] == 'modify_column':
+                col = change['column']
+                col_type = self.map_universal_type_to_target(col.data_type)
+                nullable = "" if col.nullable else " NOT NULL"
+                ddl = f"ALTER TABLE {full_table} MODIFY COLUMN `{col.name}` {col_type}{nullable};"
+                ddl_statements.append(ddl)
+            
+            elif change['type'] == 'drop_column':
+                ddl = f"ALTER TABLE {full_table} DROP COLUMN `{change['column_name']}`;"
+                ddl_statements.append(ddl)
+        
+        return ddl_statements
+    
+    def map_source_type_to_universal(self, source_type: str) -> UniversalDataType:
+        """Map StarRocks type to universal type"""
+        type_mapping = {
+            'int': UniversalDataType.INTEGER,
+            'integer': UniversalDataType.INTEGER,
+            'tinyint': UniversalDataType.SMALLINT,
+            'smallint': UniversalDataType.SMALLINT,
+            'bigint': UniversalDataType.BIGINT,
+            'largeint': UniversalDataType.BIGINT,
+            'float': UniversalDataType.FLOAT,
+            'double': UniversalDataType.DOUBLE,
+            'decimal': UniversalDataType.DECIMAL,
+            'varchar': UniversalDataType.VARCHAR,
+            'char': UniversalDataType.CHAR,
+            'string': UniversalDataType.TEXT,
+            'text': UniversalDataType.TEXT,
+            'date': UniversalDataType.DATE,
+            'datetime': UniversalDataType.DATETIME,
+            'timestamp': UniversalDataType.TIMESTAMP,
+            'boolean': UniversalDataType.BOOLEAN,
+            'bool': UniversalDataType.BOOLEAN,
+            'json': UniversalDataType.JSON,
+            'array': UniversalDataType.TEXT,  # Map array to TEXT for simplicity
+            'map': UniversalDataType.TEXT,    # Map to TEXT for simplicity
+            'struct': UniversalDataType.TEXT, # Map to TEXT for simplicity
+        }
+        
+        normalized_type = source_type.lower().strip()
+        base_type = normalized_type.split('(')[0] if '(' in normalized_type else normalized_type
+        # Handle array types like array<int>
+        if '<' in base_type:
+            base_type = base_type.split('<')[0]
+        return type_mapping.get(base_type, UniversalDataType.TEXT)
+    
+    def map_universal_type_to_target(self, universal_type: UniversalDataType) -> str:
+        """Map universal type to StarRocks type"""
+        type_mapping = {
+            UniversalDataType.INTEGER: 'INT',
+            UniversalDataType.BIGINT: 'BIGINT',
+            UniversalDataType.SMALLINT: 'SMALLINT',
+            UniversalDataType.FLOAT: 'FLOAT',
+            UniversalDataType.DOUBLE: 'DOUBLE',
+            UniversalDataType.DECIMAL: 'DECIMAL(10,2)',
+            UniversalDataType.VARCHAR: 'VARCHAR(255)',
+            UniversalDataType.TEXT: 'STRING',  # StarRocks uses STRING for text
+            UniversalDataType.CHAR: 'CHAR(1)',
+            UniversalDataType.DATE: 'DATE',
+            UniversalDataType.TIME: 'TIME',
+            UniversalDataType.TIMESTAMP: 'DATETIME',  # StarRocks DATETIME is similar to TIMESTAMP
+            UniversalDataType.DATETIME: 'DATETIME',
+            UniversalDataType.BOOLEAN: 'BOOLEAN',
+            UniversalDataType.BLOB: 'STRING',  # StarRocks doesn't have BLOB, use STRING
+            UniversalDataType.BINARY: 'STRING',
+            UniversalDataType.JSON: 'JSON',
+            UniversalDataType.UUID: 'CHAR(36)',
+            UniversalDataType.UUID_TEXT: 'CHAR(32)',      # UUID without dashes (32 hex chars)
+            UniversalDataType.UUID_TEXT_DASH: 'CHAR(36)', # UUID with dashes (36 chars)
+        }
+        return type_mapping.get(universal_type, 'STRING')
+    
+    def _get_column_type_with_params(self, col: UniversalColumn) -> str:
+        """Get column type with precision/scale/length parameters"""
+        base_type = col.data_type
+        
+        # Handle VARCHAR with custom length
+        if base_type == UniversalDataType.VARCHAR:
+            if col.max_length:
+                return f'VARCHAR({col.max_length})'
+            return 'VARCHAR(255)'  # Default
+        
+        # Handle CHAR with custom length
+        if base_type == UniversalDataType.CHAR:
+            if col.max_length:
+                return f'CHAR({col.max_length})'
+            return 'CHAR(1)'  # Default
+        
+        # Handle DECIMAL with precision and scale
+        if base_type == UniversalDataType.DECIMAL:
+            if col.precision and col.scale is not None:
+                return f'DECIMAL({col.precision},{col.scale})'
+            elif col.precision:
+                return f'DECIMAL({col.precision})'
+            return 'DECIMAL(10,2)'  # Default
+        
+        # For all other types, use the standard mapping
+        return self.map_universal_type_to_target(base_type)

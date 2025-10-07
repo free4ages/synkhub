@@ -105,7 +105,7 @@ backends:
         'on': 'u.id = p.user_id'
         type: 'left'
     filters: []
-    hash_columns: ['user_id', 'uid', 'updated_at', 'first_name', 'last_name', 'email', 'status', 'created_at']
+    # hash_columns: ['user_id', 'uid', 'updated_at', 'first_name', 'last_name', 'email', 'status', 'created_at']
     columns:
       - name: 'user_id'
         expr: 'u.id'
@@ -142,19 +142,26 @@ backends:
     datastore_name: 'local_postgres'
     table: 'user_profile_small'
     schema: 'public_copy'
-    hash_key: checksum_int
+    # hash_key: checksum_int
     columns:
       - name: 'user_id'
+        data_type: 'integer'
       - name: 'uid'
         data_type: 'uuid_text_dash'
       - name: 'updated_at'
         expr: 'source_updated_at'
+        data_type: 'datetime'
       - name: 'created_at'
         expr: 'source_created_at'
+        data_type: 'datetime'
       - name: 'name'
+        data_type: 'varchar'
       - name: 'checksum_int'
+        data_type: 'bigint'
       - name: 'status'
+        data_type: 'varchar'
       - name: 'email'
+        data_type: 'varchar'
 stages:
   - name: 'partition_generator'
     type: 'partition'

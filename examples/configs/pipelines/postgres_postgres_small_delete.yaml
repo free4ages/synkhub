@@ -90,7 +90,7 @@ pipeline_columns:
   - name: 'name'
     data_type: 'varchar'
   - name: 'checksum_int'
-    data_type: 'integer'
+    data_type: 'bigint'
     hash_key: true
 
 
