@@ -117,10 +117,15 @@ class PipelineStateManager:
     - Separate history per strategy: {pipeline}_{strategy}_history.json (last N runs)
     """
     
-    def __init__(self, state_dir: str = "./data/pipeline_states", max_runs_per_pipeline: int = 50):
+    def __init__(self, state_dir: str = "./data/pipeline_states", max_runs_per_strategy: int = 50):
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.max_runs_per_pipeline = max_runs_per_pipeline
+        
+        # Create parallel history directory
+        self.history_dir = self.state_dir.parent / "pipeline_history"
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.max_runs_per_strategy = max_runs_per_strategy
         self._locks: Dict[str, Lock] = {}
         self.logger = logging.getLogger(__name__)
     
@@ -136,7 +141,7 @@ class PipelineStateManager:
     
     def _get_run_history_file(self, pipeline_id: str, strategy_name: str) -> Path:
         """Get run history file path for a specific strategy"""
-        return self.state_dir / f"{pipeline_id}_{strategy_name}_history.json"
+        return self.history_dir / f"{pipeline_id}_{strategy_name}_history.json"
     
     def _load_pipeline_state(self, pipeline_id: str) -> Optional[PipelineRunState]:
         """Load complete pipeline state including all strategies"""
@@ -295,7 +300,7 @@ class PipelineStateManager:
         history.append(history_entry.to_dict())
         
         # Keep only last N runs for THIS strategy
-        history = history[-self.max_runs_per_pipeline:]
+        history = history[-self.max_runs_per_strategy:]
         
         # Write back to strategy-specific history file
         with open(history_file, 'w') as f:
@@ -311,7 +316,7 @@ class PipelineStateManager:
         if strategy_name is None:
             # Get first strategy history for backward compat
             pattern = f"{pipeline_id}_*_history.json"
-            history_files = list(self.state_dir.glob(pattern))
+            history_files = list(self.history_dir.glob(pattern))
             if not history_files:
                 return []
             history_file = history_files[0]

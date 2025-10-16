@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import yaml
+from datetime import datetime, timezone
 
 from ..config.config_loader import ConfigLoader
 from ..config.config_manager import ConfigManager
@@ -21,6 +22,10 @@ from ..monitoring.metrics_storage import MetricsStorage
 from ..monitoring.logs_storage import LogsStorage
 from ..sync.sync_job_manager import SyncJobManager
 from ..utils.schema_manager import SchemaManager
+from ..scheduler.pipeline_state_manager import PipelineStateManager, StrategyRunState
+from ..config.global_config_loader import get_global_config
+import uuid
+import socket
 
 
 class SyncCLI:
@@ -28,6 +33,18 @@ class SyncCLI:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        # Initialize state manager
+        try:
+            global_config = get_global_config()
+            self.state_manager = PipelineStateManager(
+                state_dir=global_config.storage.state_dir,
+                max_runs_per_strategy=global_config.storage.max_runs_per_strategy
+            )
+            self.worker_id = f"{socket.gethostname()}-manual-cli"
+        except Exception as e:
+            self.logger.warning(f"Could not initialize state manager: {e}")
+            self.state_manager = None
+            self.worker_id = "manual-cli"
     
     def _parse_bounds(self, bounds_str: Optional[str]) -> Optional[List[Dict[str, Any]]]:
         """Parse and validate bounds JSON string"""
@@ -80,6 +97,9 @@ class SyncCLI:
         """Run a specific job manually"""
         self.logger.info(f"Starting sync job: {args.job_name}")
         
+        # Generate run_id for this execution
+        run_id = str(uuid.uuid4())
+        
         # Parse bounds if provided
         bounds = None
         try:
@@ -106,49 +126,235 @@ class SyncCLI:
             self.logger.error(f"Job '{args.job_name}' not found")
             sys.exit(1)
         
+        # Determine which strategy we're running
+        strategy_name = args.strategy
+        if not strategy_name:
+            # If no strategy specified, use the first enabled strategy
+            for stage in job_config.stages:
+                for s in stage.strategies:
+                    if s.enabled:
+                        strategy_name = s.name
+                        break
+                if strategy_name:
+                    break
+        
         # Validate strategy if provided
-        if args.strategy:
+        if strategy_name:
             strategy_names = []
             for stage in job_config.stages:
                 strategy_names.extend([s.name for s in stage.strategies])
             
-            if args.strategy not in strategy_names:
+            if strategy_name not in strategy_names:
                 strategy_list = ', '.join(str(name) for name in strategy_names)
-                self.logger.error(f"Strategy '{args.strategy}' not found. Available strategies: {strategy_list}")
+                self.logger.error(f"Strategy '{strategy_name}' not found. Available strategies: {strategy_list}")
                 sys.exit(1)
         
         self.logger.info(f"Running job: {args.job_name}")
-        if args.strategy:
-            self.logger.info(f"Strategy: {args.strategy}")
+        if strategy_name:
+            self.logger.info(f"Strategy: {strategy_name}")
+            self.logger.info(f"Run ID: {run_id}")
+        
+        # Update state to "running" before execution
+        if self.state_manager and strategy_name:
+            try:
+                state = StrategyRunState(
+                    strategy=strategy_name,
+                    status="running",
+                    run_id=run_id,
+                    worker=self.worker_id,
+                    message="Manual execution started",
+                    last_attempted_at=datetime.now(timezone.utc).isoformat()
+                )
+                self.state_manager.update_state(state, args.job_name)
+                self.logger.info(f"Updated state: {args.job_name}:{strategy_name} -> running")
+            except Exception as e:
+                self.logger.warning(f"Failed to update initial state: {e}")
         
         # Create storage components
         metrics_storage = MetricsStorage(args.metrics_dir, args.max_runs_per_job)
         logs_storage = LogsStorage(args.logs_dir, args.max_runs_per_job)
         
-        # Create job manager (no locking for manual runs)
+        # Initialize execution lock manager if Redis is available
+        execution_lock_manager = None
+        try:
+            from ..config.global_config_loader import get_global_config
+            from ..scheduler.execution_lock_manager import ExecutionLockManager
+            
+            global_config = get_global_config()
+            execution_lock_manager = ExecutionLockManager(
+                redis_url=global_config.redis.url,
+                pipeline_lock_timeout=global_config.scheduler.lock_timeout
+            )
+            self.logger.info("Lock manager initialized for manual execution with locking enabled")
+        except Exception as e:
+            self.logger.warning(f"Could not initialize lock manager, running without locks: {e}")
+            self.logger.warning("Manual execution will proceed without distributed locking")
+        
+        # Get strategy-specific lock settings if strategy is specified
+        wait_for_pipeline_lock = True  # Always wait in manual mode
+        pipeline_lock_wait_timeout = 300  # Default 5 minutes
+        wait_for_table_lock = True  # Always wait in manual mode
+        table_lock_wait_timeout = 300  # Default 5 minutes
+        
+        if args.strategy and job_config:
+            strategy_config = None
+            for stage in job_config.stages:
+                for s in stage.strategies:
+                    if s.name == args.strategy:
+                        strategy_config = s
+                        break
+                if strategy_config:
+                    break
+            
+            if strategy_config:
+                # Use strategy-specific settings if available
+                wait_for_pipeline_lock = getattr(strategy_config, 'wait_for_pipeline_lock', True)
+                pipeline_lock_wait_timeout = getattr(strategy_config, 'pipeline_lock_wait_timeout', 300)
+                wait_for_table_lock = getattr(strategy_config, 'wait_for_table_lock', True)
+                table_lock_wait_timeout = getattr(strategy_config, 'table_lock_wait_timeout', 300)
+                
+                self.logger.info(
+                    f"Lock settings from strategy config: "
+                    f"wait_for_pipeline_lock={wait_for_pipeline_lock}, "
+                    f"pipeline_lock_wait_timeout={pipeline_lock_wait_timeout}s, "
+                    f"wait_for_table_lock={wait_for_table_lock}, "
+                    f"table_lock_wait_timeout={table_lock_wait_timeout}s"
+                )
+        
+        # Allow command-line overrides for lock behavior
+        if hasattr(args, 'no_wait_lock') and args.no_wait_lock:
+            wait_for_pipeline_lock = False
+            wait_for_table_lock = False
+            self.logger.info("Lock waiting disabled by --no-wait-lock flag")
+        
+        if hasattr(args, 'lock_timeout') and args.lock_timeout:
+            pipeline_lock_wait_timeout = args.lock_timeout
+            table_lock_wait_timeout = args.lock_timeout
+            self.logger.info(f"Lock timeout overridden to {args.lock_timeout}s by --lock-timeout flag")
+        
+        # Create job manager with lock manager
         job_manager = SyncJobManager(
             max_concurrent_jobs=1, 
             metrics_storage=metrics_storage,
             logs_storage=logs_storage,
-            data_storage=data_storage
-            # No lock_manager for manual CLI runs
+            data_storage=data_storage,
+            execution_lock_manager=execution_lock_manager
         )
         
         # Progress callback
         def progress_callback(job_name: str, progress):
-            self.logger.info(f"Progress: {progress.processed_partitions+progress.skipped_partitions}/{progress.total_partitions} partitions completed")
+            self.logger.info(
+                f"Progress: {progress.processed_partitions+progress.skipped_partitions}/"
+                f"{progress.total_partitions} partitions completed"
+            )
         
         try:
-            # Run the job without locking
+            self.logger.info("Attempting to acquire locks and execute job...")
+            
+            # Run the job with lock management
             result = await job_manager.run_sync_job(
                 config=job_config,
-                strategy_name=args.strategy,
+                strategy_name=strategy_name,
                 bounds=bounds,
                 progress_callback=progress_callback,
-                use_locking=False  # Disable locking for manual CLI runs
+                run_id=run_id,
+                wait_for_pipeline_lock=wait_for_pipeline_lock,
+                pipeline_lock_wait_timeout=pipeline_lock_wait_timeout,
+                wait_for_table_lock=wait_for_table_lock,
+                table_lock_wait_timeout=table_lock_wait_timeout
             )
             
-            self.logger.info(f"\nJob completed!")
+            # Check if job was skipped
+            if result.get('status') == 'skipped':
+                # Update state to "skipped"
+                if self.state_manager and strategy_name:
+                    try:
+                        state = StrategyRunState(
+                            strategy=strategy_name,
+                            status="skipped",
+                            run_id=run_id,
+                            worker=self.worker_id,
+                            message=result.get('message', 'Job was skipped'),
+                            last_attempted_at=datetime.now(timezone.utc).isoformat()
+                        )
+                        self.state_manager.update_state(state, args.job_name)
+                        self.logger.info(f"Updated state: {args.job_name}:{strategy_name} -> skipped")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to update skipped state: {e}")
+                
+                self.logger.error(f"\n{'='*80}")
+                self.logger.error(f"JOB SKIPPED")
+                self.logger.error(f"{'='*80}")
+                self.logger.error(f"Reason: {result.get('reason', 'unknown')}")
+                self.logger.error(f"Message: {result.get('message', 'Job was skipped')}")
+                self.logger.error(f"{'='*80}\n")
+                
+                if result.get('reason') == 'pipeline_lock_unavailable':
+                    self.logger.error(
+                        "Another instance of this pipeline is currently running.\n"
+                        "Options:\n"
+                        "  1. Wait for the other instance to complete and try again\n"
+                        "  2. Use --no-wait-lock flag to skip immediately if locked\n"
+                        "  3. Increase --lock-timeout if you want to wait longer"
+                    )
+                elif 'table' in result.get('reason', ''):
+                    self.logger.error(
+                        "The destination table is currently locked for DDL changes.\n"
+                        "Options:\n"
+                        "  1. Wait for the DDL operation to complete and try again\n"
+                        "  2. Use --no-wait-lock flag to skip immediately if locked"
+                    )
+                
+                sys.exit(1)
+            
+            # Check if job failed
+            if result.get('status') == 'failed':
+                # Update state to "failed"
+                if self.state_manager and strategy_name:
+                    try:
+                        current_state = self.state_manager.get_current_state(args.job_name, strategy_name)
+                        retry_count = current_state.retry_count + 1 if current_state else 1
+                        
+                        state = StrategyRunState(
+                            strategy=strategy_name,
+                            status="failed",
+                            run_id=run_id,
+                            worker=self.worker_id,
+                            message="Manual execution failed",
+                            error=result.get('error', 'Unknown error'),
+                            retry_count=retry_count,
+                            last_attempted_at=datetime.now(timezone.utc).isoformat()
+                        )
+                        self.state_manager.update_state(state, args.job_name)
+                        self.logger.info(f"Updated state: {args.job_name}:{strategy_name} -> failed")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to update failed state: {e}")
+                
+                self.logger.error(f"\nJob failed: {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+            # Success - update state to "success"
+            if self.state_manager and strategy_name:
+                try:
+                    state = StrategyRunState(
+                        strategy=strategy_name,
+                        status="success",
+                        run_id=run_id,
+                        worker=self.worker_id,
+                        message="Manual execution completed successfully",
+                        last_run=datetime.now(timezone.utc).isoformat(),
+                        last_attempted_at=datetime.now(timezone.utc).isoformat(),
+                        retry_count=0,
+                        error=None
+                    )
+                    self.state_manager.update_state(state, args.job_name)
+                    self.logger.info(f"Updated state: {args.job_name}:{strategy_name} -> success")
+                except Exception as e:
+                    self.logger.warning(f"Failed to update success state: {e}")
+            
+            # Success - display results
+            self.logger.info(f"\n{'='*80}")
+            self.logger.info(f"JOB COMPLETED SUCCESSFULLY")
+            self.logger.info(f"{'='*80}")
             self.logger.info(f"Total primary partitions: {result.get('total_primary_partitions', 0)}")
             self.logger.info(f"Total partitions: {result.get('total_partitions', 0)}")
             self.logger.info(f"Processed partitions: {result.get('processed_partitions', 0)}")
@@ -164,8 +370,30 @@ class SyncCLI:
             self.logger.info(f"Hash query count: {result.get('hash_query_count', 0)}")
             self.logger.info(f"Data query count: {result.get('data_query_count', 0)}")
             self.logger.info(f"Duration: {result.get('duration', 'unknown')}")
+            self.logger.info(f"{'='*80}\n")
         
         except Exception as e:
+            # Update state to "failed" on exception
+            if self.state_manager and strategy_name:
+                try:
+                    current_state = self.state_manager.get_current_state(args.job_name, strategy_name)
+                    retry_count = current_state.retry_count + 1 if current_state else 1
+                    
+                    state = StrategyRunState(
+                        strategy=strategy_name,
+                        status="failed",
+                        run_id=run_id,
+                        worker=self.worker_id,
+                        message="Manual execution failed with exception",
+                        error=str(e),
+                        retry_count=retry_count,
+                        last_attempted_at=datetime.now(timezone.utc).isoformat()
+                    )
+                    self.state_manager.update_state(state, args.job_name)
+                    self.logger.info(f"Updated state: {args.job_name}:{strategy_name} -> failed")
+                except Exception as state_error:
+                    self.logger.warning(f"Failed to update exception state: {state_error}")
+            
             traceback.print_exc()
             self.logger.error(f"Error running job: {e}")
             sys.exit(1)
@@ -524,6 +752,12 @@ Examples:
   # Run a job with specific strategy
   python -m synctool.cli.sync_cli run --job-name my_job --strategy delta --config-dir ./configs
 
+  # Run a job without waiting for locks (fail fast if locked)
+  python -m synctool.cli.sync_cli run --job-name my_job --no-wait-lock --config-dir ./configs
+
+  # Run a job with custom lock timeout (wait up to 10 minutes)
+  python -m synctool.cli.sync_cli run --job-name my_job --lock-timeout 600 --config-dir ./configs
+
   # Run a job with bounds filtering (date range)
   python -m synctool.cli.sync_cli run --job-name my_job --bounds '[{"column":"order_date","start":"2025-01-01","end":"2025-06-01"}]' --config-dir ./configs
 
@@ -565,6 +799,12 @@ Examples:
     run_parser.add_argument('--metrics-dir', default='./data/metrics', help='Directory for metrics storage')
     run_parser.add_argument('--logs-dir', default='./data/logs', help='Directory for logs')
     run_parser.add_argument('--max-runs-per-job', type=int, default=50, help='Maximum runs to keep per job')
+    
+    # Lock-related options
+    run_parser.add_argument('--no-wait-lock', action='store_true',
+                           help='Do not wait for locks (fail immediately if locked)')
+    run_parser.add_argument('--lock-timeout', type=int,
+                           help='Maximum time to wait for locks in seconds (overrides config)')
     
     # Database configuration for ConfigManager
     run_parser.add_argument('--db-type', choices=['postgres', 'mysql'], help='Database type for config store')
@@ -631,9 +871,6 @@ Examples:
             if args.config_store_type == 'file' and not args.config_dir:
                 print("Error: --config-dir is required for file-based configuration")
                 sys.exit(1)
-            # elif args.config_store_type == 'manager' and not args.db_type:
-            #     print("Error: Database configuration is required for manager-based configuration")
-            #     sys.exit(1)
             
             asyncio.run(cli.run_job(args))
         elif args.command == 'list':

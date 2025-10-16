@@ -25,7 +25,7 @@ class StorageConfig:
     metrics_dir: str = "./data/metrics"
     logs_dir: str = "./data/logs"
     state_dir: str = "./data/pipeline_states"
-    max_runs_per_job: int = 50
+    max_runs_per_strategy: int = 50  # Maximum runs to keep per strategy (was max_runs_per_job)
 
 
 @dataclass

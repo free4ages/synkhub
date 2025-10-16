@@ -140,6 +140,13 @@ class EnhancedARQScheduler:
                 state.error = None
             elif update.status == "failed":
                 state.retry_count = state.retry_count + 1
+            elif update.status == "skipped":
+                # Track when job was skipped for slot-aware retry logic
+                state.last_attempted_at = update.timestamp
+                self.logger.info(
+                    f"Job skipped for {update.pipeline_id}:{update.strategy_name}, "
+                    f"will be eligible for retry within current schedule slot"
+                )
             
             # State manager will auto-detect if pipeline state should be updated
             # by comparing run_ids

@@ -159,13 +159,19 @@ class EnhancedStrategySelector:
             # Get strategy state
             state = self.state_manager.get_current_state(pipeline_id, strategy_name)
             
-            # Check retry limit
-            if state and state.retry_count >= self.max_retry_count:
-                return False, f"Max retry count ({self.max_retry_count}) exceeded"
+            # Check retry limit (only applies to failed jobs, not skipped)
+            if state and state.status == "failed" and state.retry_count >= self.max_retry_count:
+                return False, f"Max retry count ({self.max_retry_count}) exceeded for failed job"
             
             # Check if strategy is currently running
             if state and state.status == "running":
                 return False, "Strategy is already running"
+            
+            # Don't automatically retry failed jobs - let cron schedule handle new attempts
+            if state and state.status == "failed":
+                # Failed jobs wait for their next regular schedule slot
+                # (they don't use slot-aware retry, only skipped jobs do)
+                return False, "Job failed on last attempt, waiting for next regular schedule"
             
             # Initialize croniter
             cron = croniter(cron_expr, current_time)
@@ -206,6 +212,48 @@ class EnhancedStrategySelector:
                 
                 # If we've already scheduled this strategy recently for this cron slot, skip
                 if last_scheduled_at_dt >= last_scheduled_time:
+                    # EXCEPTION: Allow retry if status is "skipped" AND we're still in current slot
+                    if state.status == "skipped":
+                        # Calculate next scheduled time to check if we're still in this slot
+                        cron = croniter(cron_expr, current_time)
+                        next_scheduled_time = cron.get_next(datetime)
+                        
+                        # Only retry if we're still within the current schedule slot
+                        if current_time < next_scheduled_time:
+                            # Calculate adaptive backoff based on cron interval
+                            cron_interval = self._get_cron_interval(cron_expr, current_time)
+                            # Use 50% of interval, min 30s, max 5min
+                            retry_backoff_seconds = max(30, min(300, cron_interval * 0.5))
+                            
+                            # Check how long since last attempt
+                            if state.last_attempted_at:
+                                last_attempt_dt = datetime.fromisoformat(state.last_attempted_at)
+                                if last_attempt_dt.tzinfo is None:
+                                    last_attempt_dt = last_attempt_dt.replace(tzinfo=timezone.utc)
+                                
+                                time_since_skip = (current_time - last_attempt_dt).total_seconds()
+                                
+                                if time_since_skip >= retry_backoff_seconds:
+                                    time_until_next = (next_scheduled_time - current_time).total_seconds()
+                                    return True, (
+                                        f"Retrying skipped job within current slot "
+                                        f"(skipped {time_since_skip:.0f}s ago, "
+                                        f"{time_until_next:.0f}s until next slot)"
+                                    )
+                                else:
+                                    wait_time = retry_backoff_seconds - time_since_skip
+                                    return False, f"Recently skipped, retry in {wait_time:.0f}s (within current slot)"
+                            else:
+                                # No last_attempted_at, safe to retry
+                                return True, "Retrying skipped job within current slot"
+                        else:
+                            # We've moved to a new schedule slot - abandon old retry
+                            self.logger.info(
+                                f"Abandoning retry for {pipeline_id}:{strategy_name} - "
+                                f"moved to new schedule slot"
+                            )
+                            return False, "Moved to new schedule slot, abandoning old retry"
+                    
                     return False, f"Already scheduled at {last_scheduled_at_dt.isoformat()}"
             
             # Calculate time gap since last scheduled time

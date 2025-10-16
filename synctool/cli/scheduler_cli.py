@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+@DEPRECATED: This CLI is deprecated and will be removed in a future version. Use the arq_scheduler_cli instead.
 Synctool Scheduler CLI
 
 This CLI provides commands to manage the Synctool scheduler daemon and jobs.

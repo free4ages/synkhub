@@ -17,7 +17,7 @@ storage:
   metrics_dir: "./data/metrics"
   logs_dir: "./data/logs"
   state_dir: "./data/pipeline_states"
-  max_runs_per_job: 50
+  max_runs_per_strategy: 50  # Maximum runs to keep per strategy
 
 # Worker configuration
 worker:

@@ -27,11 +27,11 @@ class ConfigAwareScheduler:
         # Initialize components
         self.metrics_storage = MetricsStorage(
             metrics_dir=scheduler_config.metrics_dir,
-            max_runs_per_job=scheduler_config.max_runs_per_job
+            max_runs_per_strategy=scheduler_config.max_runs_per_strategy  # Changed
         )
         self.logs_storage = LogsStorage(
             logs_dir=scheduler_config.logs_dir,
-            max_runs_per_job=scheduler_config.max_runs_per_job
+            max_runs_per_strategy=scheduler_config.max_runs_per_strategy  # Changed
         )
         self.lock_manager = RedisLockManager(
             redis_url=scheduler_config.redis_url,

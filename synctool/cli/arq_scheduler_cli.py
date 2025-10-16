@@ -1,7 +1,7 @@
 import asyncio
 import click
 import logging
-from ..scheduler.arq_scheduler import ARQScheduler
+from ..scheduler.enhanced_arq_scheduler import EnhancedARQScheduler
 from ..config.config_manager import ConfigManager
 from ..config.global_config_loader import load_global_config
 
@@ -48,7 +48,7 @@ def start(
     config_manager.add_file_store('default', config_dir, is_primary=True)
     
     # Create and start scheduler
-    scheduler_instance = ARQScheduler(config_manager, global_cfg)
+    scheduler_instance = EnhancedARQScheduler(config_manager, global_cfg)
     
     try:
         asyncio.run(scheduler_instance.start())
