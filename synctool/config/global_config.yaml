@@ -1,0 +1,36 @@
+# Global configuration for ARQ Scheduler and Workers
+# This config is shared across scheduler and all workers
+
+# Redis configuration
+redis:
+  url: "redis://localhost:6379"
+  database: 0
+
+# Scheduler configuration
+scheduler:
+  schedule_interval: 60  # Seconds between scheduling checks
+  http_port: 8001  # Port for HTTP API server
+  lock_timeout: 3600  # Lock timeout in seconds (1 hour)
+
+# Storage paths (accessible by both scheduler and workers)
+storage:
+  metrics_dir: "./data/metrics"
+  logs_dir: "./data/logs"
+  state_dir: "./data/pipeline_states"
+  max_runs_per_job: 50
+
+# Worker configuration
+worker:
+  max_jobs: 4  # Max concurrent jobs per worker
+  job_timeout: 3600  # Job timeout in seconds (1 hour)
+  
+# HTTP client configuration
+http:
+  timeout: 5.0  # HTTP request timeout in seconds
+  max_retries: 3  # Max retry attempts for failed requests
+
+# Log batching configuration
+log_batching:
+  batch_size: 50  # Number of log entries per batch
+  flush_interval: 2.0  # Flush interval in seconds
+  local_fallback: true  # Write to local files as backup

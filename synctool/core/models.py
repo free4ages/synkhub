@@ -320,6 +320,18 @@ class StrategyConfig:
     
     # New pipeline configuration
     pipeline_config: Optional[Dict[str, Any]] = None
+    
+    # Enhanced strategy-level execution and locking settings
+    wait_for_pipeline_lock: bool = False  # If True, wait for pipeline lock instead of skipping
+    pipeline_lock_wait_timeout: int = 60  # Max seconds to wait for pipeline lock
+    max_retry_on_lock_failure: int = 2    # Max retries when lock acquisition fails
+    wait_for_table_lock: bool = False     # If True, wait for table DDL lock
+    table_lock_wait_timeout: int = 30     # Max seconds to wait for table lock
+    
+    # Retry and failure handling
+    max_consecutive_failures: int = 3     # Max consecutive failures before marking inactive
+    retry_backoff_multiplier: float = 1.5 # Backoff multiplier for retries
+    initial_retry_delay: int = 60         # Initial retry delay in seconds
     enable_pipeline: bool = True
 
 @dataclass
@@ -557,6 +569,11 @@ class SchedulerConfig:
     metrics_dir: str = "./data/metrics"
     logs_dir: str = "./data/logs"
     max_runs_per_job: int = 50
+    # ARQ-specific fields
+    state_dir: str = "./data/pipeline_states"
+    schedule_interval: int = 60  # Seconds between scheduling checks
+    http_port: int = 8001  # Port for HTTP server to receive worker updates
+    pickle_dir: str = "./data/pickled_configs"
 
 
 @dataclass
