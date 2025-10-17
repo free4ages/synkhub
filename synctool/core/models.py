@@ -515,6 +515,7 @@ class PipelineJobConfig:
     strategies: List[StrategyConfig] = field(default_factory=list)
     stages: List[GlobalStageConfig] = field(default_factory=list)
     max_concurrent_partitions: int = 1
+    enabled: bool = True  # Add this line
     
 
 # @dataclass

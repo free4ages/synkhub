@@ -1,7 +1,7 @@
-name: 'postgres_postgres_small_delete'
+name: 'postgres_postgres_join'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
 sync_type: 'row-level'
-
+enabled: false
 
 
 
@@ -26,7 +26,7 @@ strategies:
 
     max_concurrent_partitions: 1
     enabled: true
-    cron: '*/15 * * * *'  # Every 15 minutes
+    cron: '*/1 * * * *'  # Every 15 minutes
     page_size: 10
     # prevent_update_unless_changed: true
     # use_pagination: true
@@ -46,7 +46,7 @@ strategies:
         step: 1
         step_unit: 'day'
     max_concurrent_partitions: 1
-    cron: '0 */2 * * *'  # Every 2 hours
+    cron: '*/1 * * * *'  # Every 1 minute
     page_size: 10
     use_pagination: false
     prevent_update_unless_changed: true

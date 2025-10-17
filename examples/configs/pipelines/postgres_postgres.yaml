@@ -1,6 +1,6 @@
 name: 'postgres_postgres'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
-
+enabled: false
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
 max_concurrent_partitions: 10
@@ -168,6 +168,9 @@ backends:
         data_type: 'varchar'
       - name: 'email'
         data_type: 'varchar'
+      - name: 'checksum'
+        data_type: 'varchar'
+        hash_key: true
 stages:
   - name: 'partition_generator'
     type: 'partition'

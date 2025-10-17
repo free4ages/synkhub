@@ -73,7 +73,8 @@ class PartitionStage(PipelineStage):
     async def process(self, input_stream: AsyncIterator) -> AsyncIterator[DataBatch]:
         """Main processing method - handles strategy detection, bounds calculation, and partition processing"""
         async for job_context in input_stream:
-            self.logger.info(f"Starting change detection for job: {job_context.job_name}")
+            # import pdb; pdb.set_trace()
+            self.logger.info(f"Starting partition stage for job: {job_context.job_name}")
             sync_type = self.pipeline_config.sync_type
             user_bounds = job_context.user_bounds
             

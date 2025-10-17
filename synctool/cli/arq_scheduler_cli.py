@@ -2,7 +2,7 @@ import asyncio
 import click
 import logging
 from ..scheduler.enhanced_arq_scheduler import EnhancedARQScheduler
-from ..config.config_manager import ConfigManager
+from ..config.config_manager_factory import create_config_manager_from_global
 from ..config.global_config_loader import load_global_config
 
 
@@ -13,11 +13,9 @@ def scheduler():
 
 
 @scheduler.command()
-@click.option('--config-dir', required=True, help='Pipeline config directory')
 @click.option('--global-config', default=None, help='Path to global config YAML')
 @click.option('--log-level', default='INFO', help='Log level')
 def start(
-    config_dir: str,
     global_config: str,
     log_level: str
 ):
@@ -43,45 +41,82 @@ def start(
     logger.info(f"Schedule Interval: {global_cfg.scheduler.schedule_interval}s")
     logger.info(f"Storage Dirs - Metrics: {global_cfg.storage.metrics_dir}, Logs: {global_cfg.storage.logs_dir}, State: {global_cfg.storage.state_dir}")
     
-    # Create config manager
-    config_manager = ConfigManager()
-    config_manager.add_file_store('default', config_dir, is_primary=True)
+    # Display configured stores
+    logger.info("Configured config stores:")
+    for i, store_cfg in enumerate(global_cfg.config_manager.stores, 1):
+        primary_marker = " (PRIMARY)" if store_cfg.is_primary else ""
+        if store_cfg.type == "file":
+            logger.info(f"  {i}. {store_cfg.name}: file @ {store_cfg.base_path}{primary_marker}")
+        elif store_cfg.type == "database":
+            logger.info(f"  {i}. {store_cfg.name}: {store_cfg.db_type} @ {store_cfg.db_host}:{store_cfg.db_port}/{store_cfg.db_name}{primary_marker}")
     
-    # Create and start scheduler
-    scheduler_instance = EnhancedARQScheduler(config_manager, global_cfg)
+    async def run_scheduler():
+        # Create config manager from global config
+        config_manager = await create_config_manager_from_global(global_cfg)
+        
+        # Create and start scheduler
+        scheduler_instance = EnhancedARQScheduler(config_manager, global_cfg)
+        
+        try:
+            await scheduler_instance.start()
+        except KeyboardInterrupt:
+            logger.info("Received interrupt signal, shutting down...")
+            await scheduler_instance.stop()
+        finally:
+            await config_manager.close()
     
     try:
-        asyncio.run(scheduler_instance.start())
+        asyncio.run(run_scheduler())
     except KeyboardInterrupt:
-        logger.info("Received interrupt signal, shutting down...")
-        asyncio.run(scheduler_instance.stop())
+        logger.info("Scheduler stopped")
 
 
 @scheduler.command()
-@click.option('--config-dir', required=True, help='Config directory')
-def list_jobs(config_dir: str):
+@click.option('--global-config', default=None, help='Path to global config YAML')
+@click.option('--store', help='Specific store to list from (optional)')
+def list_jobs(global_config: str, store: str):
     """List all configured jobs"""
     logging.basicConfig(level=logging.INFO)
     
-    from ..config.config_manager import ConfigManager
+    logger = logging.getLogger(__name__)
     
-    config_manager = ConfigManager()
-    config_manager.add_file_store('default', config_dir, is_primary=True)
+    # Load global config
+    if global_config:
+        global_cfg = load_global_config(global_config)
+    else:
+        global_cfg = load_global_config()
     
     async def list_configs():
-        await config_manager.initialize_database_stores()
-        configs_by_store = await config_manager.list_pipeline_configs()
+        # Create config manager from global config
+        config_manager = await create_config_manager_from_global(global_cfg)
         
-        total = 0
-        for store_name, configs in configs_by_store.items():
-            print(f"\n{store_name}:")
-            for config_meta in configs:
-                print(f"  - {config_meta.name}")
-                total += 1
-        
-        print(f"\nTotal: {total} pipeline(s)")
-        
-        await config_manager.close()
+        try:
+            configs_by_store = await config_manager.list_pipeline_configs(store_name=store)
+            
+            if not configs_by_store:
+                print("No configurations found")
+                return
+            
+            total = 0
+            for store_name, configs in configs_by_store.items():
+                print(f"\n{store_name}:")
+                print("-" * (len(store_name) + 1))
+                
+                if not configs:
+                    print("  No pipelines")
+                    continue
+                
+                for config_meta in configs:
+                    print(f"  - {config_meta.name}")
+                    if config_meta.description:
+                        print(f"    Description: {config_meta.description}")
+                    if config_meta.tags:
+                        print(f"    Tags: {', '.join(config_meta.tags)}")
+                    total += 1
+            
+            print(f"\nTotal: {total} pipeline(s)")
+        finally:
+            await config_manager.close()
     
     asyncio.run(list_configs())
 

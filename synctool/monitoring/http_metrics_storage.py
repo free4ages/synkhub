@@ -18,12 +18,12 @@ class HttpMetricsStorage(MetricsStorage):
         self,
         scheduler_url: str,
         metrics_dir: str = "./data/metrics",
-        max_runs_per_job: int = 50,
+        max_runs_per_strategy: int = 50,
         max_retries: int = 3,
         local_fallback: bool = True
     ):
         # Initialize parent (local file storage)
-        super().__init__(metrics_dir=metrics_dir, max_runs_per_job=max_runs_per_job)
+        super().__init__(metrics_dir=metrics_dir, max_runs_per_strategy=max_runs_per_strategy)
         
         self.scheduler_url = scheduler_url.rstrip('/')
         self.max_retries = max_retries
@@ -42,16 +42,23 @@ class HttpMetricsStorage(MetricsStorage):
         self._send_metrics_to_scheduler(metrics)
     
     def _send_metrics_to_scheduler(self, metrics: JobRunMetrics) -> bool:
-        """Send metrics to scheduler via HTTP (runs async in sync context)"""
+        """Send metrics to scheduler via HTTP (handles both sync and async contexts)"""
         try:
-            # Run async HTTP call in the event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Check if we're already in an async context
             try:
-                result = loop.run_until_complete(self._send_metrics_async(metrics))
-                return result
-            finally:
-                loop.close()
+                loop = asyncio.get_running_loop()
+                # We're in an async context - schedule as a task (fire and forget)
+                asyncio.create_task(self._send_metrics_async(metrics))
+                return True
+            except RuntimeError:
+                # We're in a sync context - create new event loop
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(self._send_metrics_async(metrics))
+                    return result
+                finally:
+                    loop.close()
         except Exception as e:
             self.logger.error(f"Failed to send metrics to scheduler: {e}")
             return False

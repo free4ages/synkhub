@@ -1,0 +1,179 @@
+# Enhanced Pipeline Configuration Example
+# Demonstrates strategy-level state management with multiple strategies
+
+name: users_sync_pipeline
+description: "Multi-strategy sync pipeline with enhanced scheduling and locking"
+sync_type: row-level
+
+source:
+  datastore: postgres_source
+  table: users
+  schema: public
+  alias: u
+
+destination:
+  datastore: postgres_target
+  table: users_synced
+  schema: public
+
+stages:
+  - name: sync_stage
+    type: sync
+    enabled: true
+    
+    columns:
+      - expr: "u.id"
+        name: id
+        data_type: INTEGER
+        unique_column: true
+        order_column: true
+      
+      - expr: "u.email"
+        name: email
+        data_type: VARCHAR
+        max_length: 255
+        hash_column: true
+      
+      - expr: "u.name"
+        name: name
+        data_type: VARCHAR
+        max_length: 255
+        hash_column: true
+      
+      - expr: "u.created_at"
+        name: created_at
+        data_type: TIMESTAMP
+        hash_column: false
+      
+      - expr: "u.updated_at"
+        name: updated_at
+        data_type: TIMESTAMP
+        hash_column: false
+    
+    strategies:
+      # Frequent incremental sync - runs every 15 minutes
+      - name: incremental_15min
+        type: hash
+        enabled: true
+        cron: "*/15 * * * *"  # Every 15 minutes
+        
+        # Primary partition by updated_at for incremental changes
+        primary_partitions:
+          - column_expr: "u.updated_at"
+            column_name: updated_at
+            partition_type: time_range
+            partition_step: 3600  # 1 hour partitions
+            max_partitions: 24    # Look back 24 hours
+        
+        # Lock and retry configuration
+        wait_for_pipeline_lock: false  # Skip if another strategy is running
+        pipeline_lock_wait_timeout: 30
+        max_retry_on_lock_failure: 1
+        wait_for_table_lock: false
+        table_lock_wait_timeout: 15
+        
+        # Failure handling
+        max_consecutive_failures: 3
+        retry_backoff_multiplier: 1.5
+        initial_retry_delay: 30
+        
+        # Performance
+        max_concurrent_partitions: 4
+        use_pagination: true
+        page_size: 1000
+      
+      # Hourly hash-based sync - runs every hour
+      - name: hourly_hash_sync
+        type: hash
+        enabled: true
+        cron: "0 * * * *"  # Every hour at minute 0
+        
+        # Partition by ID for full scan
+        primary_partitions:
+          - column_expr: "u.id"
+            column_name: id
+            partition_type: numeric_range
+            partition_step: 10000  # 10k users per partition
+            max_partitions: 100    # Up to 1M users
+        
+        # Lock and retry configuration
+        wait_for_pipeline_lock: true  # Wait for other strategies to complete
+        pipeline_lock_wait_timeout: 120  # Wait up to 2 minutes
+        max_retry_on_lock_failure: 2
+        wait_for_table_lock: false
+        table_lock_wait_timeout: 30
+        
+        # Failure handling
+        max_consecutive_failures: 3
+        retry_backoff_multiplier: 2.0
+        initial_retry_delay: 60
+        
+        # Performance
+        max_concurrent_partitions: 8
+        use_pagination: true
+        page_size: 5000
+      
+      # Daily full sync - runs once per day
+      - name: daily_full_sync
+        type: hash
+        enabled: true
+        cron: "0 2 * * *"  # 2 AM daily
+        match_row_count: true
+        
+        # Full scan partitioning
+        primary_partitions:
+          - column_expr: "u.id"
+            column_name: id
+            partition_type: numeric_range
+            partition_step: 50000  # Larger partitions for full sync
+            max_partitions: 100
+        
+        # Lock and retry configuration
+        wait_for_pipeline_lock: true  # Critical sync, must complete
+        pipeline_lock_wait_timeout: 300  # Wait up to 5 minutes
+        max_retry_on_lock_failure: 3
+        wait_for_table_lock: true  # Wait if DDL is in progress
+        table_lock_wait_timeout: 120
+        
+        # Failure handling
+        max_consecutive_failures: 2  # Lower threshold for daily sync
+        retry_backoff_multiplier: 1.5
+        initial_retry_delay: 120
+        
+        # Performance
+        max_concurrent_partitions: 10
+        use_pagination: true
+        page_size: 10000
+      
+      # Weekly deep validation - runs once per week
+      - name: weekly_validation
+        type: hash
+        enabled: true
+        cron: "0 3 * * 0"  # 3 AM every Sunday
+        match_row_count: true
+        
+        # Deep scan with smaller partitions
+        primary_partitions:
+          - column_expr: "u.id"
+            column_name: id
+            partition_type: numeric_range
+            partition_step: 25000
+            max_partitions: 200
+        
+        # Lock and retry configuration
+        wait_for_pipeline_lock: true
+        pipeline_lock_wait_timeout: 600  # 10 minutes for weekly job
+        max_retry_on_lock_failure: 3
+        wait_for_table_lock: true
+        table_lock_wait_timeout: 300
+        
+        # Failure handling
+        max_consecutive_failures: 2
+        retry_backoff_multiplier: 2.0
+        initial_retry_delay: 300
+        
+        # Performance
+        max_concurrent_partitions: 5
+        use_pagination: true
+        page_size: 5000
+

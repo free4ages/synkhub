@@ -161,22 +161,23 @@ class SyncEngine:
         except Exception as e:
             import traceback
             self.logger.error(f"Pipeline sync job failed: {traceback.format_exc()}")
+            raise e
             
-            # Build failure result using centralized builder
-            used_strategy = None
-            try:
-                if 'job_context' in locals():
-                    used_strategy = job_context.metadata.get("used_strategy")
-            except (NameError, AttributeError):
-                pass
+            # # Build failure result using centralized builder
+            # used_strategy = None
+            # try:
+            #     if 'job_context' in locals():
+            #         used_strategy = job_context.metadata.get("used_strategy")
+            # except (NameError, AttributeError):
+            #     pass
             
-            return dict(
-                job_name=self.config.name,
-                error=str(e),
-                progress=self.progress,
-                start_time=self.progress.start_time,
-                strategy=used_strategy
-            )
+            # return dict(
+            #     job_name=self.config.name,
+            #     error=str(e),
+            #     progress=self.progress,
+            #     start_time=self.progress.start_time,
+            #     strategy=used_strategy
+            # )
         finally:
             await self.cleanup()
     

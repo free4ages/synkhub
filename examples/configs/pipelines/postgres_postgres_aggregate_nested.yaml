@@ -1,7 +1,7 @@
-name: 'postgres_postgres_small_aggregate'
+name: 'postgres_postgres_aggregate_nested'
 description: 'Pipeline sync for aggregation'
 sync_type: 'aggregate'   # aggregate or row-level
-
+enabled: false
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
 max_concurrent_partitions: 1
@@ -27,7 +27,7 @@ strategies:
         data_type: 'datetime'
     max_concurrent_partitions: 1
     enabled: true
-    cron: '*/15 * * * *'  # Every 15 minutes
+    cron: '*/1 * * * *'  # Every 15 minutes
     page_size: 10
     use_pagination: true
     # use_sub_partition: false
@@ -54,7 +54,7 @@ strategies:
         step: 5
         data_type: 'integer'
     max_concurrent_partitions: 1
-    cron: '0 */2 * * *'  # Every 2 hours
+    cron: '*/1 * * * *'  # Every 2 hours
     page_size: 10
     use_pagination: false
     # use_sub_partition: true
@@ -112,6 +112,10 @@ backends:
         data_type: 'datetime'
       - name: 'updated_at'
         data_type: 'datetime'
+      - name: 'checksum_int'
+        data_type: 'bigint'
+        hash_key: true
+        virtual: true
 
   - name: 'destination_backend'
     type: 'postgres'

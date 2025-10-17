@@ -1,6 +1,6 @@
 name: 'postgres_starrocks_md5sum'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
-
+enabled: false
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
 max_concurrent_partitions: 1

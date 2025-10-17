@@ -7,7 +7,23 @@ from synctool.core.models import SyncStrategy
 
 class ColumnSchema:
     def __init__(self, columns: List[Column]):
-        self.columns = sorted(columns, key=lambda x: x.name)
+        # Convert dicts to Column objects if needed (defensive programming)
+        processed_columns = []
+        for col in columns:
+            if isinstance(col, dict):
+                # Handle data_type conversion
+                if 'data_type' in col and isinstance(col['data_type'], str):
+                    try:
+                        from .schema_models import UniversalDataType
+                        col = col.copy()
+                        col['data_type'] = UniversalDataType(col['data_type'])
+                    except (ValueError, KeyError):
+                        pass
+                processed_columns.append(Column(**col))
+            else:
+                processed_columns.append(col)
+        
+        self.columns = sorted(processed_columns, key=lambda x: x.name)
         self.column_map = {c.name: c for c in self.columns}
 
     @cached_property

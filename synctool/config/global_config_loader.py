@@ -1,6 +1,6 @@
 import yaml
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 
@@ -51,6 +51,40 @@ class LogBatchingConfig:
 
 
 @dataclass
+class ConfigStoreConfig:
+    """Configuration store definition"""
+    name: str
+    type: str  # 'file' or 'database'
+    is_primary: bool = False
+    # File store specific
+    base_path: Optional[str] = None
+    use_metadata_files: bool = True
+    # Database store specific
+    db_type: Optional[str] = None  # 'postgres' or 'mysql'
+    db_host: Optional[str] = None
+    db_port: Optional[int] = None
+    db_user: Optional[str] = None
+    db_password: Optional[str] = None
+    db_name: Optional[str] = None
+    table_prefix: str = "synctool_config"
+
+
+@dataclass
+class ConfigManagerConfig:
+    """Configuration Manager settings"""
+    stores: List[ConfigStoreConfig]
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ConfigManagerConfig':
+        """Create ConfigManagerConfig from dictionary"""
+        stores_data = data.get('stores', [])
+        stores = []
+        for store_data in stores_data:
+            stores.append(ConfigStoreConfig(**store_data))
+        return cls(stores=stores)
+
+
+@dataclass
 class GlobalConfig:
     """Global configuration for ARQ Scheduler and Workers"""
     redis: RedisConfig
@@ -59,6 +93,7 @@ class GlobalConfig:
     worker: WorkerConfig
     http: HttpConfig
     log_batching: LogBatchingConfig
+    config_manager: ConfigManagerConfig
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'GlobalConfig':
@@ -69,7 +104,8 @@ class GlobalConfig:
             storage=StorageConfig(**data.get('storage', {})),
             worker=WorkerConfig(**data.get('worker', {})),
             http=HttpConfig(**data.get('http', {})),
-            log_batching=LogBatchingConfig(**data.get('log_batching', {}))
+            log_batching=LogBatchingConfig(**data.get('log_batching', {})),
+            config_manager=ConfigManagerConfig.from_dict(data.get('config_manager', {}))
         )
     
     @classmethod
@@ -85,6 +121,8 @@ class GlobalConfig:
         
         return cls.from_dict(data or {})
     
+
+    
     @classmethod
     def default(cls) -> 'GlobalConfig':
         """Return default configuration"""
@@ -94,7 +132,15 @@ class GlobalConfig:
             storage=StorageConfig(),
             worker=WorkerConfig(),
             http=HttpConfig(),
-            log_batching=LogBatchingConfig()
+            log_batching=LogBatchingConfig(),
+            config_manager=ConfigManagerConfig(stores=[
+                ConfigStoreConfig(
+                    name="default_file_store",
+                    type="file",
+                    is_primary=True,
+                    base_path="./examples/configs"
+                )
+            ])
         )
 
 
@@ -108,6 +154,7 @@ def load_global_config(config_path: Optional[str] = None) -> GlobalConfig:
     If no path provided, looks for global_config.yaml in standard locations.
     """
     global _global_config
+
     
     if config_path:
         _global_config = GlobalConfig.from_yaml(config_path)

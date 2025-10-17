@@ -121,14 +121,15 @@ async def execute_pipeline_strategy(
             local_fallback=global_config.log_batching.local_fallback
         )
         
+        # Use the improved BufferedHttpLogsStorage
         logs_storage = BufferedHttpLogsStorage(
             scheduler_url=scheduler_url,
             logs_dir=global_config.storage.logs_dir,
             max_runs_per_strategy=global_config.storage.max_runs_per_strategy,
-            batch_size=global_config.log_batching.batch_size,
-            flush_interval=global_config.log_batching.flush_interval,
-            max_retries=global_config.http.max_retries,
-            local_fallback=global_config.log_batching.local_fallback
+            batch_size=50,  # Reasonable batch size
+            max_retries=1,  # Minimal retries
+            local_fallback=True,  # Always write locally
+            http_timeout=2.0  # Short timeout to avoid hangs
         )
         
         # Create job manager with lock manager
@@ -239,10 +240,23 @@ def _release_enqueue_lock(execution_lock_manager: ExecutionLockManager, pipeline
 
 def _get_strategy_config(config, strategy_name: str):
     """Get strategy config from pipeline config"""
-    for stage in config.stages:
-        for strategy in stage.strategies:
-            if strategy.name == strategy_name:
+    # Check if strategies are at pipeline level (new structure)
+    if hasattr(config, 'strategies') and config.strategies:
+        for strategy in config.strategies:
+            # Handle both dict and object formats
+            name = strategy.get('name') if isinstance(strategy, dict) else getattr(strategy, 'name', None)
+            if name == strategy_name:
                 return strategy
+    
+    # # Fallback to old structure (stage-level strategies)
+    # if hasattr(config, 'stages'):
+    #     for stage in config.stages:
+    #         if hasattr(stage, 'strategies') and stage.strategies:
+    #             for strategy in stage.strategies:
+    #                 name = strategy.get('name') if isinstance(strategy, dict) else getattr(strategy, 'name', None)
+    #                 if name == strategy_name:
+    #                     return strategy
+    
     return None
 
 

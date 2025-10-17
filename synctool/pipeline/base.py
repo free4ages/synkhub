@@ -350,7 +350,7 @@ class Pipeline:
         """Execute pipeline sequentially (original behavior)"""
         # Create initial stream from context
         current_stream = self._create_context_stream(context)
-        
+        # import pdb; pdb.set_trace()
         # Chain stages together
         for stage in self.stages:
             if stage.is_active:

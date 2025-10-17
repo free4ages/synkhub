@@ -53,17 +53,26 @@ class EnhancedStrategySelector:
         current_time = datetime.now(timezone.utc)
         pipeline_id = config.name
         
+        self.logger.info(f"=== Evaluating strategies for pipeline '{pipeline_id}' at {current_time.isoformat()} ===")
+        
+        # Log how many strategies are in the config
+        self.logger.info(f"Pipeline '{pipeline_id}' has {len(config.strategies) if config.strategies else 0} strategies")
+        
         eligible_strategies = []
         
 
         for strategy_config in config.strategies:
+            strategy_name = strategy_config.name
+            
+            self.logger.info(f"Checking strategy '{strategy_name}': enabled={strategy_config.enabled}, cron={strategy_config.cron}")
+            
             if not strategy_config.enabled:
+                self.logger.info(f"  ✗ Strategy '{strategy_name}' is disabled")
                 continue
             
             if not strategy_config.cron:
+                self.logger.info(f"  ✗ Strategy '{strategy_name}' has no cron expression")
                 continue
-            
-            strategy_name = strategy_config.name
             
             # Check if this strategy should run based on cron and last run time
             should_run, reason = self._should_run_strategy(
@@ -74,11 +83,11 @@ class EnhancedStrategySelector:
                 # Calculate cron interval (time until next run)
                 interval_seconds = self._get_cron_interval(strategy_config.cron, current_time)
                 eligible_strategies.append((strategy_config, strategy_name, interval_seconds))
-                self.logger.debug(
-                    f"Strategy '{strategy_name}' is eligible: {reason} (interval: {interval_seconds}s)"
+                self.logger.info(
+                    f"  ✓ Strategy '{strategy_name}' is ELIGIBLE: {reason} (interval: {interval_seconds}s)"
                 )
             else:
-                self.logger.debug(f"Strategy '{strategy_name}' not due: {reason}")
+                self.logger.info(f"  ✗ Strategy '{strategy_name}' NOT DUE: {reason}")
         
         # Select strategy with maximum interval (longest time between runs = highest priority)
         if eligible_strategies:
@@ -87,11 +96,12 @@ class EnhancedStrategySelector:
             selected = eligible_strategies[0]
             interval_str = self._format_interval(selected[2])
             self.logger.info(
-                f"Selected strategy '{selected[1]}' for pipeline '{pipeline_id}' "
-                f"(interval: {interval_str}, priority: highest)"
+                f">>> SELECTED strategy '{selected[1]}' for pipeline '{pipeline_id}' "
+                f"(interval: {interval_str}, priority: highest among {len(eligible_strategies)} eligible)"
             )
             return (selected[0], selected[1])
         
+        self.logger.info(f">>> NO strategy selected for pipeline '{pipeline_id}' (no eligible strategies)")
         return None
     
     def _get_cron_interval(self, cron_expr: str, current_time: datetime) -> float:
@@ -159,19 +169,34 @@ class EnhancedStrategySelector:
             # Get strategy state
             state = self.state_manager.get_current_state(pipeline_id, strategy_name)
             
+            # Log the current state
+            if state:
+                self.logger.debug(
+                    f"    State for {pipeline_id}:{strategy_name} -> "
+                    f"status={state.status}, retry_count={state.retry_count}, "
+                    f"last_run={state.last_run}, last_scheduled_at={state.last_scheduled_at}"
+                )
+            else:
+                self.logger.debug(f"    No state found for {pipeline_id}:{strategy_name}")
+            
             # Check retry limit (only applies to failed jobs, not skipped)
             if state and state.status == "failed" and state.retry_count >= self.max_retry_count:
                 return False, f"Max retry count ({self.max_retry_count}) exceeded for failed job"
             
             # Check if strategy is currently running
-            if state and state.status == "running":
-                return False, "Strategy is already running"
+            # if state and state.status == "running":
+            #     return False, "Strategy is already running"
             
-            # Don't automatically retry failed jobs - let cron schedule handle new attempts
-            if state and state.status == "failed":
-                # Failed jobs wait for their next regular schedule slot
-                # (they don't use slot-aware retry, only skipped jobs do)
-                return False, "Job failed on last attempt, waiting for next regular schedule"
+            # # Don't automatically retry failed jobs - let cron schedule handle new attempts
+            # if state and state.status == "failed":
+            #     self.logger.info(
+            #         f"    Strategy {pipeline_id}:{strategy_name} is in FAILED state "
+            #         f"(retry_count={state.retry_count}, error={state.error}). "
+            #         f"Blocking until state is reset or next schedule."
+            #     )
+            #     # Failed jobs wait for their next regular schedule slot
+            #     # (they don't use slot-aware retry, only skipped jobs do)
+            #     return False, "Job failed on last attempt, waiting for next regular schedule"
             
             # Initialize croniter
             cron = croniter(cron_expr, current_time)

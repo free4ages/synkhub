@@ -44,12 +44,35 @@ class ConfigLoader:
                     raise ValueError(f"Columns are required for backend {backend_dict['name']}")
                 
                 # Process columns with inheritance from pipeline_columns
-                backend_dict['db_columns'] = [
-                    Column(**col) for col in ConfigLoader._process_columns(
-                        backend_dict['columns'], 
-                        pipeline_columns_map
-                    )
-                ]
+                # Only create db_columns if not already present (for deserialization from JSON)
+                if 'db_columns' not in backend_dict:
+                    backend_dict['db_columns'] = [
+                        Column(**col) for col in ConfigLoader._process_columns(
+                            backend_dict['columns'], 
+                            pipeline_columns_map
+                        )
+                    ]
+                else:
+                    # db_columns already exists (from serialization), convert dicts to Column objects
+                    # Need to process to convert data_type strings to enums
+                    processed_db_cols = []
+                    for col in backend_dict['db_columns']:
+                        if isinstance(col, dict):
+                            # Convert data_type string to enum if present
+                            col_copy = col.copy()
+                            if 'data_type' in col_copy and isinstance(col_copy['data_type'], str):
+                                try:
+                                    col_copy['data_type'] = UniversalDataType(col_copy['data_type'])
+                                except ValueError:
+                                    # Keep as string if not a valid enum value
+                                    pass
+                            processed_db_cols.append(Column(**col_copy))
+                        else:
+                            # Already a Column object
+                            processed_db_cols.append(col)
+                    backend_dict['db_columns'] = processed_db_cols
+                
+                # Keep backends as dicts for now - they'll be used by stages processing
                 # if 'hash_columns' in backend_dict:
                 #     #prepare hash columns and hash_key column
                 #     hash_columns = []
@@ -109,6 +132,58 @@ class ConfigLoader:
                 )
                 processed_stages.append(stage)
             processed_config['stages'] = processed_stages
+
+        # Convert backends from dicts to BackendConfig objects after stage processing
+        if 'backends' in processed_config:
+            processed_backends = []
+            for backend_dict in processed_config['backends']:
+                # Convert joins if they're dicts
+                if 'join' in backend_dict and backend_dict['join']:
+                    backend_dict['join'] = [
+                        JoinConfig(**j) if isinstance(j, dict) else j 
+                        for j in backend_dict['join']
+                    ]
+                
+                # Convert filters if they're dicts  
+                if 'filters' in backend_dict and backend_dict['filters']:
+                    backend_dict['filters'] = [
+                        FilterConfig(**f) if isinstance(f, dict) else f 
+                        for f in backend_dict['filters']
+                    ]
+                
+                # Process and convert columns (but leave db_columns as is - already Column objects)
+                if 'columns' in backend_dict and backend_dict['columns']:
+                    # First check if columns are already Column objects
+                    if isinstance(backend_dict['columns'][0], Column):
+                        # Already Column objects, keep as is
+                        pass
+                    else:
+                        # Process columns to add defaults like expr, then convert to Column objects
+                        processed_cols = ConfigLoader._process_columns(
+                            backend_dict['columns'],
+                            pipeline_columns_map
+                        )
+                        backend_dict['columns'] = [Column(**col) for col in processed_cols]
+
+                # ADD THIS BLOCK - Ensure db_columns are also Column objects
+                if 'db_columns' in backend_dict and backend_dict['db_columns']:
+                    if isinstance(backend_dict['db_columns'][0], dict):
+                        # Still dicts, need to convert
+                        processed_db_cols = []
+                        for col in backend_dict['db_columns']:
+                            col_copy = col.copy()
+                            if 'data_type' in col_copy and isinstance(col_copy['data_type'], str):
+                                try:
+                                    col_copy['data_type'] = UniversalDataType(col_copy['data_type'])
+                                except (ValueError, KeyError):
+                                    pass
+                            processed_db_cols.append(Column(**col_copy))
+                        backend_dict['db_columns'] = processed_db_cols
+
+                processed_backends.append(BackendConfig(**backend_dict))
+            
+            processed_config['backends'] = processed_backends
+
         processed_config.pop("pipeline_columns", None)
         return PipelineJobConfig(**processed_config)
     
@@ -488,6 +563,34 @@ class ConfigLoader:
         
         if not config.stages:
             issues.append("At least one stage must be defined")
+
+        # Validate change_detection stage hash_key columns
+        change_detection_stage = next((stage for stage in config.stages if stage.type == 'change_detection'), None)
+        if change_detection_stage:
+            if change_detection_stage.source and change_detection_stage.destination:
+                # Get hash_key columns from source
+                source_hash_columns = [col for col in change_detection_stage.source.db_columns if col.hash_key]
+                # Get hash_key columns from destination
+                dest_hash_columns = [col for col in change_detection_stage.destination.db_columns if col.hash_key]
+                
+                # Check if both have at least one hash_key column
+                if not source_hash_columns:
+                    issues.append(f"Change detection source backend '{change_detection_stage.source.name}' must have at least one db_column with hash_key=True")
+                if not dest_hash_columns:
+                    issues.append(f"Change detection destination backend '{change_detection_stage.destination.name}' must have at least one db_column with hash_key=True")
+                
+                # Check if hash_key column names match
+                if source_hash_columns and dest_hash_columns:
+                    source_hash_names = {col.name for col in source_hash_columns}
+                    dest_hash_names = {col.name for col in dest_hash_columns}
+                    
+                    # Check if there's at least one matching hash_key column name
+                    matching_names = source_hash_names & dest_hash_names
+                    if not matching_names:
+                        issues.append(
+                            f"Change detection source and destination backends must have at least one hash_key column with the same name. "
+                            f"Source has: {sorted(source_hash_names)}, Destination has: {sorted(dest_hash_names)}"
+                        )
         
         # Validate each stage
         for stage in config.stages:

@@ -70,6 +70,7 @@ class PopulateStage(PipelineStage):
                     traceback.print_exc()
                     rows_failed = len(batch.data) or partition.num_rows
                     batch.batch_metadata["rows_failed"] = rows_failed
+                    raise e
                     
                     # Update progress with deletion count
                 if self.progress_manager:
@@ -85,7 +86,7 @@ class PopulateStage(PipelineStage):
                     traceback.print_exc()
                     rows_failed = len(batch.data) or partition.num_rows
                     batch.batch_metadata["rows_failed"] = rows_failed
-                
+                    raise e
                 # Update progress with insertion count
                 if self.progress_manager:
                     self.progress_manager.update_progress(rows_inserted=rows_inserted, rows_failed=rows_failed)
@@ -102,6 +103,7 @@ class PopulateStage(PipelineStage):
                     rows_failed = len(batch.data) or partition.num_rows
                     batch.batch_metadata["rows_failed"] = rows_failed
                     batch.batch_metadata["rows_updated"] = rows_updated
+                    raise e
                 
                 # Update progress with update count
                 if self.progress_manager:

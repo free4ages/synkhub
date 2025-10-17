@@ -1,6 +1,6 @@
 name: 'postgres_postgres_md5sum'
 description: 'Pipeline sync from Postgres to Postgres with cron expressions'
-
+enabled: false
 # global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
 # This is an optional field. If not provided, every stage will have to define its own columns.
 max_concurrent_partitions: 10
@@ -19,7 +19,7 @@ strategies:
         step: 1800 # 30 minutes
         data_type: 'datetime'
     enabled: true
-    cron: '*/15 * * * *'  # Every 15 minutes
+    cron: '*/1 * * * *'  # Every 15 minutes
     page_size: 10
     use_pagination: true
     # use_sub_partition: false
@@ -38,7 +38,7 @@ strategies:
       - column: 'user_id'
         step: 5000
         data_type: 'integer'
-    cron: '0 */2 * * *'  # Every 2 hours
+    cron: '*/1 * * * *'  # Every 2 hours
     page_size: 10000
     use_pagination: false
   

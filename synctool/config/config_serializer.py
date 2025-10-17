@@ -36,12 +36,20 @@ class ConfigSerializer:
         if hasattr(config, 'max_concurrent_partitions') and config.max_concurrent_partitions != 1:
             result['max_concurrent_partitions'] = config.max_concurrent_partitions
         
+        # Add enabled field
+        if hasattr(config, 'enabled'):
+            result['enabled'] = config.enabled
+
         if hasattr(config, 'strategies') and config.strategies:
             result['strategies'] = [ConfigSerializer._strategy_to_dict(strat) for strat in config.strategies]
         
-        # Note: pipeline_columns and backends are typically not stored in PipelineJobConfig directly
-        # They are processed during loading. If you need to serialize them, you'll need to 
-        # reconstruct them from the stages and columns.
+        # Add backends serialization (includes db_columns)
+        if hasattr(config, 'backends') and config.backends:
+            result['backends'] = [ConfigSerializer._backend_to_dict(backend) for backend in config.backends]
+        
+        # Add columns serialization if not empty (commented out as columns are typically in stages/backends)
+        # if hasattr(config, 'columns') and config.columns:
+        #     result['columns'] = [ConfigSerializer._column_to_dict(col) for col in config.columns]
         
         return result
     
@@ -60,30 +68,27 @@ class ConfigSerializer:
         """Convert Column to dictionary"""
         result = {
             'name': column.name,
+            'expr': column.expr,  # Always include expr since it's required
         }
-        
-        # Only include expr if different from name
-        if column.expr and column.expr != column.name:
-            result['expr'] = column.expr
         
         # Only include non-default values
         if column.data_type is not None:
             result['data_type'] = column.data_type.value if hasattr(column.data_type, 'value') else str(column.data_type)
         
-        if not column.hash_column:
+        if column.hash_column:
             result['hash_column'] = column.hash_column
-        if not column.data_column:
-            result['data_column'] = column.data_column
+        # if not column.data_column:
+        #     result['data_column'] = column.data_column
         if column.unique_column:
             result['unique_column'] = column.unique_column
         if column.order_column:
             result['order_column'] = column.order_column
         if column.direction != "asc":
             result['direction'] = column.direction
-        if column.delta_column:
-            result['delta_column'] = column.delta_column
-        if column.partition_column:
-            result['partition_column'] = column.partition_column
+        # if column.delta_column:
+        #     result['delta_column'] = column.delta_column
+        # if column.partition_column:
+        #     result['partition_column'] = column.partition_column
         if column.hash_key:
             result['hash_key'] = column.hash_key
         
@@ -154,8 +159,12 @@ class ConfigSerializer:
             result['join'] = [ConfigSerializer._join_to_dict(join) for join in backend.join]
         if backend.filters:
             result['filters'] = [ConfigSerializer._filter_to_dict(filter_) for filter_ in backend.filters]
+        if backend.group_by:
+            result['group_by'] = backend.group_by
         if backend.columns:
             result['columns'] = [ConfigSerializer._column_to_dict(col) for col in backend.columns]
+        if backend.db_columns:
+            result['db_columns'] = [ConfigSerializer._column_to_dict(col) for col in backend.db_columns]
         if backend.config:
             result['config'] = backend.config
         if backend.hash_cache:
