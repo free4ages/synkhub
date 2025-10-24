@@ -25,9 +25,9 @@ class PartitionStageConfig(StageConfig):
     source: BackendConfig = None
     destination: BackendConfig = None
     columns: List[Column] = field(default_factory=list)
-    hash_algo: HashAlgo = field(default=HashAlgo.HASH_MD5_HASH)
+    # hash_algo: HashAlgo = field(default=HashAlgo.HASH_MD5_HASH)
     # columns: List[Dict[str, Any]] = field(default_factory=list)
-    strategies: List[Dict[str, Any]] = field(default_factory=list)
+    # strategies: List[Dict[str, Any]] = field(default_factory=list)
     enabled: bool = True
 
 
@@ -41,7 +41,8 @@ class PartitionStage(PipelineStage):
         config = PartitionStageConfig.from_global_stage_config(config)
         super().__init__(config.name, config, pipeline_config, logger)
         self.sync_engine = sync_engine
-        self.strategies = self.config.strategies
+        self.strategies = pipeline_config.strategies
+        self.hash_algo = pipeline_config.hash_algo
         self.column_schema = ColumnSchema(config.columns)
         # self.source_column_schema = sync_engine.column_mapper.build_schema(self.config.source.get('columns', [])) if sync_engine.column_mapper else None
         # self.destination_column_schema = sync_engine.column_mapper.build_schema(self.config.destination.get('columns', [])) if sync_engine.column_mapper else None

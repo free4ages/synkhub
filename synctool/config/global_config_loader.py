@@ -85,6 +85,20 @@ class ConfigManagerConfig:
 
 
 @dataclass
+class BuildSystemConfig:
+    """Build system configuration"""
+    user_config_dir: str = "./examples/configs/pipelines"
+    built_config_dir: str = "./examples/configs/built"
+    datastores_path: str = "./examples/configs/datastores.yaml"
+    auto_build_on_startup: bool = True
+    ddl_check_on_build: str = "required"  # "required" | "optional" | "skip"
+    on_build_failure: str = "keep_old"  # "keep_old" | "remove"
+    remove_orphaned_configs: bool = True
+    allow_empty_source_dir: bool = True
+    build_lock_timeout: int = 30
+
+
+@dataclass
 class GlobalConfig:
     """Global configuration for ARQ Scheduler and Workers"""
     redis: RedisConfig
@@ -94,6 +108,7 @@ class GlobalConfig:
     http: HttpConfig
     log_batching: LogBatchingConfig
     config_manager: ConfigManagerConfig
+    build_system: BuildSystemConfig
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'GlobalConfig':
@@ -105,7 +120,8 @@ class GlobalConfig:
             worker=WorkerConfig(**data.get('worker', {})),
             http=HttpConfig(**data.get('http', {})),
             log_batching=LogBatchingConfig(**data.get('log_batching', {})),
-            config_manager=ConfigManagerConfig.from_dict(data.get('config_manager', {}))
+            config_manager=ConfigManagerConfig.from_dict(data.get('config_manager', {})),
+            build_system=BuildSystemConfig(**data.get('build_system', {}))
         )
     
     @classmethod
@@ -140,7 +156,8 @@ class GlobalConfig:
                     is_primary=True,
                     base_path="./examples/configs"
                 )
-            ])
+            ]),
+            build_system=BuildSystemConfig()
         )
 
 

@@ -466,9 +466,9 @@ class BackendConfig:
     columns: List[Column] = field(default_factory=list)
     db_columns: List[Column] = field(default_factory=list)
     config: Optional[Dict[str, Any]] = None
-    hash_cache: Optional[Dict[str, Any]] = None
-    index_cache: Optional[Dict[str, Any]] = None
-    supports_update: bool = False  # Whether the backend supports update operations
+    # hash_cache: Optional[Dict[str, Any]] = None
+    # index_cache: Optional[Dict[str, Any]] = None
+    # supports_update: bool = False  # Whether the backend supports update operations
 
 # @dataclass
 # class ProviderConfig:

@@ -30,10 +30,10 @@ class ChangeDetectionConfig(StageConfig):
     source: BackendConfig = None
     destination: BackendConfig = None
     columns: List[Column] = field(default_factory=list)
-    hash_algo: HashAlgo = field(default=HashAlgo.HASH_MD5_HASH)
+    # hash_algo: HashAlgo = field(default=HashAlgo.HASH_MD5_HASH)
     # columns: List[Dict[str, Any]] = field(default_factory=list)
-    strategies: List[Dict[str, Any]] = field(default_factory=list)
-    max_concurrent_partitions: int = 1
+    # strategies: List[Dict[str, Any]] = field(default_factory=list)
+    # max_concurrent_partitions: int = 1
     enabled: bool = True
 
 
@@ -45,8 +45,9 @@ class ChangeDetectionStage(PipelineStage):
         config = ChangeDetectionConfig.from_global_stage_config(config)
         super().__init__(config.name, config, pipeline_config, logger)
         self.sync_engine = sync_engine
-        self.strategies = self.config.strategies
+        # self.strategies = self.config.strategies
         self.column_schema = ColumnSchema(config.columns)
+        self.hash_algo = pipeline_config.hash_algo
         # self.source_column_schema = sync_engine.column_mapper.build_schema(self.config.source.get('columns', [])) if sync_engine.column_mapper else None
         # self.destination_column_schema = sync_engine.column_mapper.build_schema(self.config.destination.get('columns', [])) if sync_engine.column_mapper else None
         # self.data_storage = data_storage
@@ -471,10 +472,10 @@ class ChangeDetectionStage(PipelineStage):
         destination_backend = self.destination_backend
         # import pdb; pdb.set_trace()
         src_rows = await source_backend.fetch_child_partition_hashes(
-            partition, hash_algo=self.config.hash_algo, partition_dimensions=partition_dimensions
+            partition, hash_algo=self.hash_algo, partition_dimensions=partition_dimensions
         )
         destination_rows = await destination_backend.fetch_child_partition_hashes(
-            partition, hash_algo=self.config.hash_algo, partition_dimensions=partition_dimensions
+            partition, hash_algo=self.hash_algo, partition_dimensions=partition_dimensions
         )
         self.progress_manager.update_progress(detection_query_count=1)
         

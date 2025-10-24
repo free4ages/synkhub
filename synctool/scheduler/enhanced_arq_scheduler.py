@@ -21,8 +21,11 @@ import uvicorn
 
 from ..config.config_manager import ConfigManager
 from ..config.global_config_loader import get_global_config, GlobalConfig
+from ..config.build.manager import ConfigBuildManager
+from ..config.deployment.service import DeploymentService
 from ..core.models import DataStorage, PipelineJobConfig, HashAlgo, BackendConfig, Column, StrategyConfig, GlobalStageConfig
 from ..config.config_serializer import ConfigSerializer
+from ..config.config_loader import ConfigLoader
 from .pipeline_state_manager import PipelineStateManager, PipelineRunState, StrategyRunState
 from .enhanced_strategy_selector import EnhancedStrategySelector
 from .execution_lock_manager import ExecutionLockManager
@@ -60,6 +63,21 @@ class EnhancedARQScheduler:
             global_config = get_global_config()
         self.global_config = global_config
         
+        # Initialize build manager
+        self.build_manager = ConfigBuildManager(
+            user_config_dir=Path(global_config.build_system.user_config_dir),
+            built_config_dir=Path(global_config.build_system.built_config_dir),
+            datastores_path=Path(global_config.build_system.datastores_path),
+            ddl_check_on_build=global_config.build_system.ddl_check_on_build,
+            on_build_failure=global_config.build_system.on_build_failure,
+            remove_orphaned_configs=global_config.build_system.remove_orphaned_configs,
+            allow_empty_source_dir=global_config.build_system.allow_empty_source_dir,
+            build_lock_timeout=global_config.build_system.build_lock_timeout
+        )
+        
+        # Initialize deployment service
+        self.deployment_service = DeploymentService(self.build_manager)
+        
         # Initialize pipeline state manager with strategy-level support
         self.state_manager = PipelineStateManager(
             state_dir=global_config.storage.state_dir,
@@ -92,6 +110,7 @@ class EnhancedARQScheduler:
         # HTTP server for worker updates
         self.app = FastAPI(title="Enhanced Scheduler API")
         self._setup_http_endpoints()
+        self._setup_deployment_endpoints()
         self.http_port = global_config.scheduler.http_port
     
     def _setup_http_endpoints(self):
@@ -424,6 +443,18 @@ class EnhancedARQScheduler:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
     
+    def _setup_deployment_endpoints(self):
+        """Setup deployment endpoints"""
+        from ..api.routers import deployment
+        
+        # Set the deployment service instance
+        deployment.set_deployment_service(self.deployment_service)
+        
+        # Include the deployment router
+        self.app.include_router(deployment.router)
+        
+        self.logger.info("Deployment endpoints registered")
+    
     async def start(self):
         """Start the enhanced scheduler"""
         self.running = True
@@ -438,10 +469,24 @@ class EnhancedARQScheduler:
         )
         self.redis_pool = await create_pool(redis_settings)
         
-        # Load datastores and configs
+        # Initialize database stores
         await self.config_manager.initialize_database_stores()
+        
+        # Run build process if enabled
+        if self.global_config.build_system.auto_build_on_startup:
+            self.logger.info("Running build process...")
+            try:
+                build_report = await self.build_manager.build_all_changed_configs()
+                build_report.print_summary()
+            except Exception as e:
+                self.logger.error(f"Build process failed: {e}", exc_info=True)
+                # Continue with existing built configs
+        else:
+            self.logger.info("Auto-build disabled, skipping build process")
+        
+        # Load datastores and configs from built folder
         await self.load_datastores()
-        await self.load_configs()
+        await self.load_configs_from_built()
         
         # Start HTTP server in background
         config = uvicorn.Config(
@@ -479,7 +524,7 @@ class EnhancedARQScheduler:
     
     async def load_configs(self, include_disabled: bool = False):
         """
-        Load pipeline configs
+        Load pipeline configs (legacy method - loads from config manager)
         
         Args:
             include_disabled: If True, load disabled pipelines as well
@@ -520,6 +565,67 @@ class EnhancedARQScheduler:
         
         except Exception as e:
             self.logger.error(f"Failed to load configs: {e}")
+    
+    async def load_configs_from_built(self):
+        """
+        Load pipeline configs from built folder.
+        Configs are pre-validated, so minimal validation needed.
+        """
+        try:
+            self.job_configs.clear()
+            
+            # Get list of built configs
+            built_config_names = self.build_manager.metadata_manager.list_built_configs()
+            
+            if not built_config_names:
+                self.logger.warning("No built configs found")
+                return
+            
+            self.logger.info(f"Loading {len(built_config_names)} configs from built folder")
+            
+            total_loaded = 0
+            total_failed = 0
+            
+            for config_name in built_config_names:
+                try:
+                    # Get config path
+                    config_path = self.build_manager.metadata_manager.get_config_path(config_name)
+                    
+                    if not config_path.exists():
+                        self.logger.warning(f"Config file not found: {config_name}")
+                        total_failed += 1
+                        continue
+                    
+                    # Load config
+                    config = ConfigLoader.load_from_yaml(str(config_path))
+                    
+                    if not config:
+                        self.logger.warning(f"Failed to load config: {config_name}")
+                        total_failed += 1
+                        continue
+                    
+                    # Load metadata to check if enabled
+                    metadata = self.build_manager.metadata_manager.load_metadata(config_name)
+                    
+                    if metadata and not metadata.enabled:
+                        self.logger.info(f"Skipping disabled config: {config_name}")
+                        continue
+                    
+                    self.job_configs[config.name] = config
+                    total_loaded += 1
+                    self.logger.debug(f"Loaded config: {config.name}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to load config {config_name}: {e}")
+                    total_failed += 1
+            
+            self.logger.info(
+                f"Loaded {total_loaded} configs from built folder"
+                f"{f', {total_failed} failed' if total_failed > 0 else ''}"
+            )
+        
+        except Exception as e:
+            self.logger.error(f"Failed to load configs from built folder: {e}")
     
     async def _schedule_jobs(self):
         """

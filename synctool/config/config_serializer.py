@@ -126,16 +126,16 @@ class ConfigSerializer:
             result['columns'] = [ConfigSerializer._column_to_dict(col) for col in stage.columns]
         if stage.transformations:
             result['transformations'] = [ConfigSerializer._transformation_to_dict(trans) for trans in stage.transformations]
-        if hasattr(stage, 'page_size') and stage.page_size is not None:
-            result['page_size'] = stage.page_size
-        if hasattr(stage, 'strategies') and stage.strategies:
-            result['strategies'] = [ConfigSerializer._strategy_to_dict(strat) for strat in stage.strategies]
-        if hasattr(stage, 'max_concurrent_partitions') and stage.max_concurrent_partitions != 1:
-            result['max_concurrent_partitions'] = stage.max_concurrent_partitions
-        if hasattr(stage, 'target_batch_size') and stage.target_batch_size is not None:
-            result['target_batch_size'] = stage.target_batch_size
-        if hasattr(stage, 'use_pagination') and stage.use_pagination is not None:
-            result['use_pagination'] = stage.use_pagination
+        # if hasattr(stage, 'page_size') and stage.page_size is not None:
+        #     result['page_size'] = stage.page_size
+        # if hasattr(stage, 'strategies') and stage.strategies:
+        #     result['strategies'] = [ConfigSerializer._strategy_to_dict(strat) for strat in stage.strategies]
+        # if hasattr(stage, 'max_concurrent_partitions') and stage.max_concurrent_partitions != 1:
+        #     result['max_concurrent_partitions'] = stage.max_concurrent_partitions
+        # if hasattr(stage, 'target_batch_size') and stage.target_batch_size is not None:
+        #     result['target_batch_size'] = stage.target_batch_size
+        # if hasattr(stage, 'use_pagination') and stage.use_pagination is not None:
+        #     result['use_pagination'] = stage.use_pagination
         
         return result
     
@@ -167,12 +167,12 @@ class ConfigSerializer:
             result['db_columns'] = [ConfigSerializer._column_to_dict(col) for col in backend.db_columns]
         if backend.config:
             result['config'] = backend.config
-        if backend.hash_cache:
-            result['hash_cache'] = backend.hash_cache
-        if backend.index_cache:
-            result['index_cache'] = backend.index_cache
-        if backend.supports_update:
-            result['supports_update'] = backend.supports_update
+        # if backend.hash_cache:
+        #     result['hash_cache'] = backend.hash_cache
+        # if backend.index_cache:
+        #     result['index_cache'] = backend.index_cache
+        # if backend.supports_update:
+        #     result['supports_update'] = backend.supports_update
         
         return result
     

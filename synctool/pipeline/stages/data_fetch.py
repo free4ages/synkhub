@@ -20,7 +20,7 @@ class DataFetchStageConfig(StageConfig):
     source: BackendConfig = None
     destination: BackendConfig = None
     columns: List[Column] = field(default_factory=list)
-    hash_algo: HashAlgo = field(default=HashAlgo.HASH_MD5_HASH)
+    # hash_algo: HashAlgo = field(default=HashAlgo.HASH_MD5_HASH)
     enabled: bool = True
     config: Dict[str, Any] = field(default_factory=dict)
 
@@ -34,6 +34,7 @@ class DataFetchStage(PipelineStage):
         self.sync_engine = sync_engine
         self.source_backend = sync_engine.create_backend(self.config.source)
         self.destination_backend = None
+        self.hash_algo = pipeline_config.hash_algo
         if self.config.destination:
             self.destination_backend = sync_engine.create_backend(self.config.destination)
         self.progress_manager = progress_manager
@@ -352,7 +353,7 @@ class DataFetchStage(PipelineStage):
                 data = await backend.fetch_partition_data(
                     partition,
                     with_hash=with_hash,
-                    hash_algo=self.config.hash_algo,
+                    hash_algo=self.hash_algo,
                     page_size=page_size,
                     offset=offset
                 )
@@ -392,7 +393,7 @@ class DataFetchStage(PipelineStage):
             data = await backend.fetch_partition_data(
                 partition,
                 with_hash=with_hash,
-                hash_algo=self.config.hash_algo
+                hash_algo=self.hash_algo
             )
             
             metadata = {

@@ -221,7 +221,7 @@ class Backend(BaseBackend):
         # Fix filter parsing - config.filters should be List[Dict] not List[str]
         self.filters = self.config.filters if self.config.filters else []
         self.group_by = self.config.group_by if self.config.group_by else []
-        self.supports_update = config.supports_update
+        # self.supports_update = config.supports_update
         # Removed: self.column_mapping = ColumnMapping(**config.column_mapping) if config.column_mapping else ColumnMapping()
         self.column_schema = column_schema  # New: ColumnSchema instance
         self.db_column_schema = ColumnSchema(columns=self.config.db_columns)
