@@ -1,0 +1,359 @@
+name: 'uuid_virtual_example'
+description: 'Example showing UUID types, virtual columns, and expr usage'
+sync_type: 'row-level'
+
+# This example demonstrates:
+# 1. Different UUID storage formats (uuid, uuid_text, uuid_text_dash)
+# 2. Virtual columns that are excluded from DDL generation
+# 3. Using expr for actual database column names (different from name aliases)
+
+pipeline_columns:
+  # Primary key
+  - name: 'order_id'
+    data_type: 'integer'
+    unique_column: true
+    order_column: true
+    direction: 'asc'
+  
+  # UUID Types Demonstration
+  # ------------------------
+  
+  # 1. Native UUID (PostgreSQL: UUID, MySQL/StarRocks: CHAR(36))
+  - name: 'user_uuid'
+    data_type: 'uuid'
+  
+  # 2. UUID without dashes - Compact format (32 chars)
+  # Format: 550e8400e29b41d4a716446655440000
+  - name: 'session_id'
+    data_type: 'uuid_text'
+  
+  # 3. UUID with dashes - Standard text format (36 chars)
+  # Format: 550e8400-e29b-41d4-a716-446655440000
+  - name: 'transaction_id'
+    data_type: 'uuid_text_dash'
+  
+  # 4. Another compact UUID
+  - name: 'tracking_code'
+    data_type: 'uuid_text'
+  
+  # Regular columns with precision/scale/length
+  - name: 'order_date'
+    data_type: 'datetime'
+  
+  - name: 'user_id'
+    data_type: 'integer'
+  
+  - name: 'product_id'
+    data_type: 'integer'
+  
+  - name: 'quantity'
+    data_type: 'decimal'
+    precision: 10
+    scale: 3
+  
+  - name: 'unit_price'
+    data_type: 'decimal'
+    precision: 10
+    scale: 2
+  
+  - name: 'total_amount'
+    data_type: 'decimal'
+    precision: 15
+    scale: 2
+  
+  - name: 'user_email'
+    data_type: 'varchar'
+    max_length: 100
+  
+  - name: 'product_name'
+    data_type: 'varchar'
+    max_length: 200
+  
+  - name: 'status'
+    data_type: 'varchar'
+    max_length: 20
+  
+  - name: 'created_at'
+    data_type: 'timestamp'
+  
+  - name: 'updated_at'
+    data_type: 'timestamp'
+  
+  # Virtual Columns - Excluded from DDL Generation
+  # -----------------------------------------------
+  # These are computed/hash columns used for change detection
+  # but don't physically exist in the database
+  
+  - name: 'order_hash'
+    data_type: 'bigint'
+    hash_key: true
+    virtual: true  # ← Will be excluded from CREATE TABLE
+  
+  - name: 'user_hash'
+    data_type: 'bigint'
+    hash_key: true
+    virtual: true  # ← Will be excluded from CREATE TABLE
+  
+  - name: 'product_hash'
+    data_type: 'bigint'
+    hash_key: true
+    virtual: true  # ← Will be excluded from CREATE TABLE
+
+backends:
+  - name: 'source_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders'
+    schema: 'public'
+    columns:
+      # Column Name Mapping (expr vs name)
+      # ----------------------------------
+      # name: Pipeline/application alias
+      # expr: Actual database column name
+      
+      - name: 'order_id'
+        expr: 'id'  # Database column is 'id', not 'order_id'
+      
+      - name: 'user_uuid'
+        expr: 'user_uuid'
+      
+      - name: 'session_id'
+        expr: 'session_uuid'  # Database column is 'session_uuid'
+      
+      - name: 'transaction_id'
+        expr: 'txn_id'  # Database column is 'txn_id'
+      
+      - name: 'tracking_code'
+        expr: 'tracking'  # Database column is 'tracking'
+      
+      - name: 'order_date'
+        expr: 'order_date'
+      
+      - name: 'user_id'
+        expr: 'user_id'
+      
+      - name: 'product_id'
+        expr: 'product_id'
+      
+      - name: 'quantity'
+        expr: 'qty'  # Database column is 'qty'
+      
+      - name: 'unit_price'
+        expr: 'price'  # Database column is 'price'
+      
+      - name: 'total_amount'
+        expr: 'amount'  # Database column is 'amount'
+      
+      - name: 'user_email'
+        expr: 'email'  # Database column is 'email'
+      
+      - name: 'product_name'
+        expr: 'name'  # Database column is 'name'
+      
+      - name: 'status'
+        expr: 'status'
+      
+      - name: 'created_at'
+        expr: 'created_at'
+      
+      - name: 'updated_at'
+        expr: 'updated_at'
+      
+      # Virtual columns - used for change detection
+      - name: 'order_hash'
+        hash_key: true
+        virtual: true
+  
+  - name: 'destination_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders'
+    schema: 'analytics'
+    columns:
+      # Destination can have different column names
+      - name: 'order_id'
+        expr: 'id'  # Still 'id' in destination
+      
+      - name: 'user_uuid'
+      - name: 'session_id'
+      - name: 'transaction_id'
+      - name: 'tracking_code'
+      - name: 'order_date'
+      - name: 'user_id'
+      - name: 'product_id'
+      - name: 'quantity'
+      - name: 'unit_price'
+      - name: 'total_amount'
+      - name: 'user_email'
+      - name: 'product_name'
+      - name: 'status'
+      - name: 'created_at'
+      - name: 'updated_at'
+      
+      # Virtual columns - excluded from DDL
+      - name: 'order_hash'
+        hash_key: true
+        virtual: true
+      
+      - name: 'user_hash'
+        virtual: true
+      
+      - name: 'product_hash'
+        virtual: true
+  
+  # Additional backends for enrichment
+  - name: 'user_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'users'
+    schema: 'public'
+    columns:
+      - name: 'user_id'
+        expr: 'id'
+      - name: 'user_email'
+        expr: 'email'
+      - name: 'user_hash'
+        hash_key: true
+        virtual: true  # Virtual hash column
+  
+  - name: 'product_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'products'
+    schema: 'public'
+    columns:
+      - name: 'product_id'
+        expr: 'id'
+      - name: 'product_name'
+        expr: 'name'
+      - name: 'product_hash'
+        hash_key: true
+        virtual: true  # Virtual hash column
+
+stages:
+  - name: 'partition_generator'
+    type: 'partition'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  
+  - name: 'change_detection'
+    type: 'change_detection'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  
+  - name: 'data_fetch'
+    type: 'data_fetch'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  
+  - name: 'join_user'
+    type: 'join'
+    enabled: true
+    source:
+      name: user_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'user_id'
+          backend_key: 'user_id'
+          operator: '='
+  
+  - name: 'join_product'
+    type: 'join'
+    enabled: true
+    source:
+      name: product_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'product_id'
+          backend_key: 'product_id'
+          operator: '='
+  
+  - name: 'populate'
+    type: 'populate'
+    enabled: true
+    destination:
+      name: destination_backend
+
+# Expected DDL Generation:
+# ------------------------
+#
+# For Source (public.orders):
+# CREATE TABLE public.orders (
+#   id INTEGER NOT NULL,
+#   user_uuid UUID,
+#   session_uuid CHAR(32),        -- uuid_text: no dashes
+#   txn_id CHAR(36),               -- uuid_text_dash: with dashes
+#   tracking CHAR(32),             -- uuid_text: no dashes
+#   order_date TIMESTAMP,
+#   user_id INTEGER,
+#   product_id INTEGER,
+#   qty NUMERIC(10,3),
+#   price NUMERIC(10,2),
+#   amount NUMERIC(15,2),
+#   email VARCHAR(100),
+#   name VARCHAR(200),
+#   status VARCHAR(20),
+#   created_at TIMESTAMP,
+#   updated_at TIMESTAMP,
+#   -- Note: order_hash is virtual, excluded from DDL
+#   PRIMARY KEY (id)
+# );
+#
+# For Destination (analytics.orders):
+# CREATE TABLE analytics.orders (
+#   id INTEGER NOT NULL,
+#   user_uuid UUID,
+#   session_id CHAR(32),
+#   transaction_id CHAR(36),
+#   tracking_code CHAR(32),
+#   order_date TIMESTAMP,
+#   user_id INTEGER,
+#   product_id INTEGER,
+#   quantity NUMERIC(10,3),
+#   unit_price NUMERIC(10,2),
+#   total_amount NUMERIC(15,2),
+#   user_email VARCHAR(100),
+#   product_name VARCHAR(200),
+#   status VARCHAR(20),
+#   created_at TIMESTAMP,
+#   updated_at TIMESTAMP,
+#   -- Note: order_hash, user_hash, product_hash are virtual, excluded
+#   PRIMARY KEY (id)
+# );
+#
+# Key Points:
+# -----------
+# 1. UUID types:
+#    - uuid → PostgreSQL UUID / MySQL CHAR(36)
+#    - uuid_text → CHAR(32) everywhere
+#    - uuid_text_dash → CHAR(36) everywhere
+#
+# 2. Virtual columns (order_hash, user_hash, product_hash):
+#    - Used in sync operations for change detection
+#    - Automatically excluded from DDL generation
+#    - Save database storage space
+#
+# 3. Column names (expr vs name):
+#    - DDL uses expr (actual DB column name)
+#    - Pipeline uses name (application alias)
+#    - Example: name='order_id', expr='id' → DDL uses 'id'
+#
+# Usage:
+# ------
+# Generate DDL:
+#   synctool sync generate-ddl --job-name uuid_virtual_example
+#
+# Apply DDL:
+#   synctool sync generate-ddl --job-name uuid_virtual_example --apply
+

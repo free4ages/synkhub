@@ -1,13 +1,15 @@
 from datetime import datetime
 from typing import List, Optional
 from dataclasses import asdict
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from pathlib import Path
+from pydantic import BaseModel
 
 from ..models.api_models import JobSummary, JobDetail, StrategyDetail, ApiResponse
 from ...scheduler.file_scheduler import FileBasedScheduler
 from ...monitoring.metrics_storage import MetricsStorage
 from ...core.models import SchedulerConfig
+from ...utils.schema_manager import SchemaManager
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -98,7 +100,7 @@ async def get_job_detail(
         job_detail = JobDetail(
             name=job_config.name,
             description=job_config.description,
-            partition_key=job_config.partition_key,
+            partition_column=job_config.partition_column,
             partition_step=job_config.partition_step,
             max_concurrent_partitions=job_config.max_concurrent_partitions,
             strategies=strategy_details,
@@ -140,4 +142,125 @@ async def reload_job_config(
         return ApiResponse(
             success=False,
             message=f"Failed to reload job config: {str(e)}"
+        )
+
+
+class GenerateDDLRequest(BaseModel):
+    """Request model for DDL generation"""
+    apply: bool = False
+    if_not_exists: bool = False
+
+
+@router.post("/{job_name}/generate-ddl")
+async def generate_table_ddl(
+    job_name: str,
+    request: GenerateDDLRequest = Body(...),
+    scheduler: FileBasedScheduler = Depends(get_scheduler)
+):
+    """Generate DDL for populate stage destination table (auto-detects populate stage)"""
+    try:
+        # Load configs to get job configuration
+        await scheduler.load_configs()
+        job_configs = scheduler.get_job_configs()
+        
+        if job_name not in job_configs:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Job '{job_name}' not found"
+            )
+        
+        job_config = job_configs[job_name]
+        
+        # Get datastores from app state
+        from ..state import app_state
+        data_storage = app_state.get("data_storage")
+        if not data_storage:
+            raise HTTPException(
+                status_code=500,
+                detail="Data storage not initialized"
+            )
+        
+        # Find the populate stage (auto-detect)
+        populate_stages = [stage for stage in job_config.stages if stage.type == 'populate']
+        
+        if not populate_stages:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No populate stage found in job '{job_name}'"
+            )
+        
+        if len(populate_stages) > 1:
+            stage_names = [s.name for s in populate_stages]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Multiple populate stages found in job '{job_name}': {stage_names}. Please ensure only one populate stage per pipeline."
+            )
+        
+        stage_config = populate_stages[0]
+        
+        if not stage_config.destination:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No destination configured for stage '{stage_config.name}'"
+            )
+        
+        if not stage_config.destination.datastore_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No datastore configured for destination in stage '{stage_config.name}'"
+            )
+        
+        # Get datastore
+        datastore = data_storage.get_datastore(stage_config.destination.datastore_name)
+        if not datastore:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Datastore '{stage_config.destination.datastore_name}' not found"
+            )
+        
+        # Connect to datastore
+        await datastore.connect()
+        
+        try:
+            # Use SchemaManager to generate DDL
+            schema_manager = SchemaManager()
+            result = await schema_manager.ensure_table_schema(
+                datastore=datastore,
+                columns=stage_config.destination.columns,
+                table_name=stage_config.destination.table,
+                schema_name=stage_config.destination.schema,
+                apply=request.apply,
+                if_not_exists=request.if_not_exists
+            )
+            
+            return {
+                'success': True,
+                'job_name': job_name,
+                'stage_name': stage_config.name,
+                'result': {
+                    'table_name': result['table_name'],
+                    'action': result['action'],
+                    'table_exists': result['table_exists'],
+                    'changes': [
+                        {
+                            'type': change['type'],
+                            'description': change.get('description', change['type'])
+                        }
+                        for change in result['changes']
+                    ],
+                    'ddl_statements': result['ddl_statements'],
+                    'applied': result['applied']
+                }
+            }
+        finally:
+            await datastore.disconnect()
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate DDL: {str(e)}"
         )

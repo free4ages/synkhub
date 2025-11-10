@@ -10,8 +10,8 @@ import json
 import decimal
 import logging
 
-from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table
-from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, Partition, Column, DataStorage
+from synctool.core.query_models import Field, Filter, Join, Query, RowHashMeta, Table, GroupHashMeta
+from ..core.models import BackendConfig, FilterConfig, ConnectionConfig, JoinConfig, MultiDimensionPartition, Column, DataStorage
 from ..core.column_mapper import ColumnSchema  # Add this import
 from ..core.enums import HashAlgo, BackendType, Capability
 from ..core.decorators import async_retry
@@ -119,29 +119,29 @@ class BaseBackend(ABC):
         pass
 
     @abstractmethod
-    async def insert_partition_data(self, data: List[Dict], partition: Optional[Partition] = None, upsert: bool = False) -> int:
+    async def insert_partition_data(self, data: List[Dict], partition: Optional[MultiDimensionPartition] = None, upsert: bool = False) -> int:
         """Insert data into the provider"""
         pass
     
-    @abstractmethod
-    async def insert_delta_data(self, data: List[Dict], partition: Optional[Partition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
-        """Insert data into the provider"""
-        pass
+    # @abstractmethod
+    # async def insert_delta_data(self, data: List[Dict], partition: Optional[MultiDimensionPartition] = None, batch_size: int = 5000, upsert: bool = False) -> int:
+    #     """Insert data into the provider"""
+    #     pass
 
     @abstractmethod
-    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         pass
     
-    @abstractmethod
-    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Fetch data based on partition bounds with optional pagination"""
-        pass
+    # @abstractmethod
+    # async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Fetch data based on partition bounds with optional pagination"""
+    #     pass
 
-    @abstractmethod
-    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch partition row hashes from destination along with state columns"""
-        pass
+    # @abstractmethod
+    # async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    #     """Fetch partition row hashes from destination along with state columns"""
+    #     pass
 
     @abstractmethod
     async def get_partition_bounds(self) -> Tuple[Any, Any]:
@@ -159,7 +159,7 @@ class BaseBackend(ABC):
         pass
 
     @abstractmethod
-    async def fetch_child_partition_hashes(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Fetch child hashes for a partition"""
         pass
 
@@ -187,7 +187,7 @@ class BaseBackend(ABC):
 class Backend(BaseBackend):
     def __init__(self, config: BackendConfig, column_schema: Optional[ColumnSchema] = None, logger= None, data_storage: Optional[DataStorage] = None):
         self.config = config
-        self.provider_type = BackendType(config.type)
+        # self.provider_type = BackendType(self.config.type)
         
         # Debug logging
         if logger:
@@ -199,31 +199,35 @@ class Backend(BaseBackend):
         self._datastore = None
         
         # Resolve datastore_name to connection config
-        if hasattr(config, 'datastore_name') and config.datastore_name and data_storage:
-            datastore = data_storage.get_datastore(config.datastore_name)
+        if hasattr(self.config, 'datastore_name') and self.config.datastore_name and data_storage:
+            datastore = data_storage.get_datastore(self.config.datastore_name)
             if not datastore:
-                raise ValueError(f"Datastore '{config.datastore_name}' not found in DataStorage")
+                raise ValueError(f"Datastore '{self.config.datastore_name}' not found in DataStorage")
             self.connection_config = datastore.connection
             self._datastore = datastore  # Store for capability checking
             if logger:
-                logger.info(f"Using datastore '{config.datastore_name}' connection config")
+                logger.info(f"Using datastore '{self.config.datastore_name}' connection config")
         else:
             # Fallback for backward compatibility with direct connection config
             self.connection_config = ConnectionConfig(**config.connection) if hasattr(config, 'connection') and config.connection else ConnectionConfig()
             if logger:
                 logger.info(f"Using fallback connection config: {self.connection_config}")
         
-        self.table = config.table
-        self.alias = config.alias
-        self.schema = config.schema or self.connection_config.schema or self._get_default_schema()
+        self.table = self.config.table
+        self.alias = self.config.alias
+        self.schema = self.config.schema or self.connection_config.schema or self._get_default_schema()
         # Removed: self.columns = [ColumnConfig(**col) for col in config.columns] if config.columns else []
-        self.joins = [JoinConfig(**join) for join in config.join] if config.join else []
+        self.joins = self.config.join if self.config.join else []
         # Fix filter parsing - config.filters should be List[Dict] not List[str]
-        self.filters = [FilterConfig(**filter) for filter in (config.filters or []) if isinstance(filter, dict)]
+        self.filters = self.config.filters if self.config.filters else []
+        self.group_by = self.config.group_by if self.config.group_by else []
         self.supports_update = config.supports_update
         # Removed: self.column_mapping = ColumnMapping(**config.column_mapping) if config.column_mapping else ColumnMapping()
         self.column_schema = column_schema  # New: ColumnSchema instance
-        self.backend = config.backend
+        self.db_column_schema = ColumnSchema(columns=self.config.db_columns)
+        # self.hash_columns = self.config.hash_columns if self.config.hash_columns else []
+        # self.hash_key_column = self.config.hash_key_column if self.config.hash_key_column else None
+        # self.backend = config.backend
         self.provider_config = config.config or {}
         logger_name = f"{logger.name}.backend.{self.config.type}" if logger else f"{__name__}.{self.config.type}"
         self.logger = logging.getLogger(logger_name)
@@ -257,7 +261,7 @@ class SqlBackend(Backend):
     async def insert_partition_data(
         self,
         data: List[Dict],
-        partition: Optional[Partition] = None,
+        partition: Optional[MultiDimensionPartition] = None,
         column_keys: Optional[List[str]] = None,
         batch_size: int = 5000,
         upsert: bool = False
@@ -269,7 +273,7 @@ class SqlBackend(Backend):
     async def insert_delta_data(
         self,
         data: List[Dict],
-        partition: Optional[Partition] = None,
+        partition: Optional[MultiDimensionPartition] = None,
         column_keys: Optional[List[str]] = None,
         batch_size: int = 5000,
         upsert: bool = False
@@ -280,9 +284,9 @@ class SqlBackend(Backend):
 
     
     async def get_partition_bounds(self) -> Tuple[Any, Any]:
-        if not self.column_schema or not self.column_schema.partition_key:
+        if not self.column_schema or not self.column_schema.partition_column:
             raise ValueError("No partition key configured in column schema")
-        column = self.column_schema.partition_key.expr
+        column = self.column_schema.partition_column.expr
         """Get min and max values for partition column"""
         query = f"SELECT MIN({column}) as min_val, MAX({column}) as max_val FROM {self.table}"
         result = await self.execute_query(query)
@@ -290,18 +294,18 @@ class SqlBackend(Backend):
     
     async def get_last_sync_point(self) -> Any:
         """Get the last sync point for a specific column type"""
-        if not self.column_schema or not self.column_schema.delta_key:
+        if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key configured in column schema")
-        column = self.column_schema.delta_key.expr
+        column = self.column_schema.delta_column.expr
         query = f"SELECT MAX({column}) as last_sync_point FROM {self.table}"
         result = await self.execute_query(query)
         return result[0]['last_sync_point']
 
     async def get_max_sync_point(self) -> Any:
         """Get the maximum sync point for a specific column type"""
-        if not self.column_schema or not self.column_schema.delta_key:
+        if not self.column_schema or not self.column_schema.delta_column:
             raise ValueError("No delta key configured in column schema")
-        column = self.column_schema.delta_key.expr
+        column = self.column_schema.delta_column.expr
         query = f"SELECT MAX({column}) as max_sync_point FROM {self.table}"
         result = await self.execute_query(query)
         return result[0]['max_sync_point']
@@ -312,30 +316,30 @@ class SqlBackend(Backend):
         return SqlBuilder.build(query)
 
 
-    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Fetch data based on partition bounds with optional pagination"""
-        if partition is None:
-            # Handle case where no partition is provided
-            query = Query(
-                select=self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
-                table=self._build_table_query(),
-                joins=self._build_join_query(),
-                filters=self._build_filter_query(),
-                limit=page_size,
-                offset=offset
-            )
-        else:
-            query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
-        sql, params = self._build_sql(query)
-        return await self.execute_query(sql, params)
+    # async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Fetch data based on partition bounds with optional pagination"""
+    #     if partition is None:
+    #         # Handle case where no partition is provided
+    #         query = Query(
+    #             select=self._build_select_query(with_hash=with_hash, hash_algo=hash_algo),
+    #             table=self._build_table_query(),
+    #             joins=self._build_join_query(),
+    #             filters=self._build_filter_query(),
+    #             limit=page_size,
+    #             offset=offset
+    #         )
+    #     else:
+    #         query = self._build_partition_data_query(partition, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
+    #     sql, params = self._build_sql(query)
+    #     return await self.execute_query(sql, params)
     
-    async def fetch_child_partition_hashes(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         return []
     
 
@@ -346,33 +350,123 @@ class SqlBackend(Backend):
             final.append(self.column_schema.transform_data(d))
         return final
     
-    def _build_partition_data_query(self, partition: Partition, partition_column=None, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
+    def build_partition_filter_query(self, partition: MultiDimensionPartition) -> List[Filter]:
+        filters = []
+        partition_bounds = partition.get_partition_bounds()
+        for bound in partition_bounds:
+            # Handle composite partition bounds
+            if hasattr(bound, 'columns') and len(bound.columns) > 1:  # CompositePartitionBound
+                column_exprs = [self.db_column_schema.column(col).expr for col in bound.columns]
+                column_objects = [self.db_column_schema.column(col) for col in bound.columns]
+                
+                if bound.type == "composite_range":
+                    # Handle composite range bounds: (datetime, user_id) >= (start_time, start_user) AND (datetime, user_id) < (end_time, end_user)
+                    casted_start = tuple(
+                        column_objects[i].cast(bound.start_values[i]) 
+                        for i in range(len(bound.start_values))
+                    )
+                    casted_end = tuple(
+                        column_objects[i].cast(bound.end_values[i]) 
+                        for i in range(len(bound.end_values))
+                    )
+                    
+                    filters.append(Filter(
+                        column="",  # Not used for composite
+                        columns=column_exprs,
+                        operator="composite_range",
+                        value=None,
+                        start_values=casted_start,
+                        end_values=casted_end
+                    ))
+                    
+                elif bound.type == "composite_values":
+                    # Handle composite discrete values: (user_id, product_id) IN ((1, 2), (3, 1))
+                    casted_tuples = []
+                    for value_tuple in bound.value_tuples:
+                        casted_tuple = tuple(
+                            column_objects[i].cast(value_tuple[i]) 
+                            for i in range(len(value_tuple))
+                        )
+                        casted_tuples.append(casted_tuple)
+                    
+                    filters.append(Filter(
+                        column="",  # Not used for composite
+                        columns=column_exprs,
+                        operator="in", 
+                        value=casted_tuples
+                    ))
+                    
+                elif bound.type == "composite_mixed":
+                    # Handle mixed range and value dimensions
+                    casted_values = []
+                    for i, val in enumerate(bound.dimension_values):
+                        if bound.dimension_types[i] == "range":
+                            # val is tuple (start, end) - cast both
+                            start_casted = column_objects[i].cast(val[0])
+                            end_casted = column_objects[i].cast(val[1])
+                            casted_values.append((start_casted, end_casted))
+                        else:  # "value"
+                            # val is single value or list - cast appropriately
+                            if isinstance(val, (list, tuple)):
+                                casted_values.append([column_objects[i].cast(v) for v in val])
+                            else:
+                                casted_values.append(column_objects[i].cast(val))
+                    
+                    # Create a special filter for mixed composite
+                    from ..core.models import CompositePartitionBound
+                    composite_filter = Filter(
+                        column="",  # Not used
+                        columns=column_exprs,
+                        operator="composite_mixed",
+                        value=None
+                    )
+                    # Attach the bound object for detailed processing
+                    composite_filter.composite_bound = CompositePartitionBound(
+                        columns=bound.columns,
+                        data_types=bound.data_types,
+                        dimension_types=bound.dimension_types,
+                        dimension_values=casted_values
+                    )
+                    filters.append(composite_filter)
+                    
+            else:
+                # Handle regular single-column bounds
+                column = self.db_column_schema.column(bound.column)
+                if bound.type == "range":
+                    filters.extend([     
+                            Filter(column=column.expr, operator=">=", value=column.cast(bound.start)),
+                            Filter(column=column.expr, operator="<", value=column.cast(bound.end))
+                        ])
+                elif bound.type == "value":
+                    filters.extend([
+                        Filter(column=column.expr, operator="in", value=[column.cast(x) for x in bound.value])
+                    ])
+        return filters
+    
+    def _build_partition_data_query(self, partition: MultiDimensionPartition, columns:List[Column]=None, order_by=None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None):
         filters = self._build_filter_query()
-        if not self.column_schema or not self.column_schema.partition_key:
-            raise ValueError("No partition key configured in column schema")
-        partition_column = partition_column or self.column_schema.partition_key.name
-        column: Column = self.column_schema.column(partition_column)
-
-        filters.extend([     
-            Filter(column=column.expr, operator=">=", value=cast_value(partition.start, column.dtype)),
-            Filter(column=column.expr, operator="<", value=cast_value(partition.end, column.dtype))
-        ])
+        partition_filters = self.build_partition_filter_query(partition)
+        filters.extend(partition_filters)
+        
         
         # Add pagination if specified
         limit = page_size if page_size is not None else None
+        is_group = bool(self.group_by)
 
-        return Query(
-            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns),
+        query = Query(
+            select = self._build_select_query(with_hash=with_hash, hash_algo=hash_algo, columns=columns,partition_id=partition.partition_id, is_group=is_group),
             table= self._build_table_query(),
             joins= self._build_join_query(),
             filters= filters,
+            group_by=[Field(expr=col) for col in self.group_by],
             limit=limit,
             offset=offset,
             order_by=order_by
         )
+        return query
     
     
-    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None):
+    def _build_select_query(self, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, columns:List[Column]=None, partition_id:str=None, is_group=False):
         select = []
         if not self.column_schema:
             raise ValueError("No column schema configured")
@@ -382,15 +476,22 @@ class SqlBackend(Backend):
         for col in columns_to_fetch:
             select.append(Field(expr=col.expr or col.name, alias=col.name))
         
+        if partition_id:
+            select.append(Field(expr=f"'{partition_id}'", alias='partition__'))
+        
         if with_hash:
-            hash_column = self.column_schema.hash_key
-            if hash_column:
+            hash_column = self.db_column_schema.hash_key
+            alias = hash_column.name if hash_column else "hash__"
+            if hash_column and not hash_column.virtual:
                 # hash_columns is a list of Column objects
-                select.append(Field(expr=hash_column.expr, alias='hash__'))
+                select.append(Field(expr=hash_column.expr, alias=alias))
+            elif is_group:
+                hash_columns = [Field(expr=col.expr or col.name) for col in self.db_column_schema.columns_to_hash()]
+                select.append(Field(expr="", alias=alias, type="grouphash", metadata=GroupHashMeta(strategy=hash_algo, fields=hash_columns)))
             else:
                 # Generate hash from all columns
-                hash_fields = [Field(expr=col.expr or col.name) for col in self.column_schema.columns if col.insert]
-                select.append(Field(expr="", alias="hash__", type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_fields)))
+                hash_columns = [Field(expr=col.expr or col.name) for col in self.db_column_schema.columns_to_hash()]
+                select.append(Field(expr="", alias=alias, type="rowhash", metadata=RowHashMeta(strategy=hash_algo, fields=hash_columns)))
         return select
  
 

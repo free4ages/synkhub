@@ -46,16 +46,16 @@ class EnrichmentEngine:
             column_details = {
                 "dest": transformation.dest
             }
-            if transformation.dtype:
-                column_details["dtype"] = transformation.dtype
+            if transformation.data_type:
+                column_details["data_type"] = transformation.data_type
             enriched_columns.append(column_details)
         for dim in self.dimensions:
             for field in dim.fields:
                 column_details = {
                     "dest": field.dest
                 }
-                if field.dtype:
-                    column_details["dtype"] = field.dtype
+                if field.data_type:
+                    column_details["data_type"] = field.data_type
                 enriched_columns.append(column_details)
         return enriched_columns
     

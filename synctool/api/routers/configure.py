@@ -39,7 +39,7 @@ class EnrichmentTransformation(BaseModel):
     columns: List[str]
     transform: str
     dest: str
-    dtype: str
+    data_type: str
 
 class SchemaExtractionRequest(BaseModel):
     source_connection: DatabaseConnection
@@ -50,9 +50,9 @@ class ColumnMapping(BaseModel):
     name: str
     src: Optional[str] = None
     dest: Optional[str] = None
-    dtype: Optional[str] = None
-    unique_key: bool = False  # For sync operations, not database constraints
-    order_key: bool = False
+    data_type: Optional[str] = None
+    unique_column: bool = False  # For sync operations, not database constraints
+    order_column: bool = False
     hash_key: bool = False
     insert: bool = True
     direction: Optional[str] = "asc"
@@ -63,7 +63,7 @@ class MigrationConfig(BaseModel):
     source_provider: Dict[str, Any]
     destination_provider: Dict[str, Any]
     column_map: List[ColumnMapping]
-    partition_key: Optional[str] = None
+    partition_column: Optional[str] = None
     partition_step: Optional[int] = None
     # New fields for enhanced functionality
     source_filters: Optional[List[FilterCondition]] = None
@@ -311,19 +311,19 @@ async def validate_config(config: MigrationConfig):
             errors.append("At least one column mapping is required")
         
         # Check for required columns
-        has_unique_key = any(col.unique_key for col in config.column_map)
-        if not has_unique_key:
+        has_unique_column = any(col.unique_column for col in config.column_map)
+        if not has_unique_column:
             errors.append("At least one unique key is required for sync operations")
         
         # Check for required key configuration
-        if not config.partition_key:
+        if not config.partition_column:
             errors.append("Partition key is required")
         
         if not config.partition_step:
             errors.append("Partition step is required")
         
-        if config.partition_key and not any(col.name == config.partition_key for col in config.column_map):
-            errors.append(f"Partition key '{config.partition_key}' not found in column map")
+        if config.partition_column and not any(col.name == config.partition_column for col in config.column_map):
+            errors.append(f"Partition key '{config.partition_column}' not found in column map")
         
         # Validate strategies if present
         if config.strategies:
@@ -372,12 +372,12 @@ async def validate_config(config: MigrationConfig):
 #             'name': col.name,
 #             'src': col.name,  # Default to same name
 #             'dest': col.name,
-#             'dtype': col.data_type.value,
-#             'unique_key': col.primary_key,  # Suggest primary keys as unique keys for sync
-#             'order_key': col.primary_key,   # Suggest primary keys as order keys
+#             'data_type': col.data_type.value,
+#             'unique_column': col.primary_key,  # Suggest primary keys as unique keys for sync
+#             'order_column': col.primary_key,   # Suggest primary keys as order keys
 #             'hash_key': False,  # Default to false
 #             'insert': True,
-#             'direction': 'asc' if col.primary_key else None  # 'asc' if order_key is True, else null
+#             'direction': 'asc' if col.primary_key else None  # 'asc' if order_column is True, else null
 #         }
 #         column_map.append(column_mapping)
     
@@ -386,9 +386,9 @@ async def validate_config(config: MigrationConfig):
 #         'name': 'checksum',
 #         'src': None,  # Computed column
 #         'dest': 'checksum',
-#         'dtype': 'varchar',
-#         'unique_key': False,
-#         'order_key': False,
+#         'data_type': 'varchar',
+#         'unique_column': False,
+#         'order_column': False,
 #         'hash_key': True,  # This is the hash key for change detection
 #         'insert': True,
 #         'direction': None  # No direction for hash key column
@@ -442,7 +442,7 @@ async def validate_config(config: MigrationConfig):
 #             }
 #         },
 #         'column_map': column_map,
-#         'partition_key': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
+#         'partition_column': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
 #         'partition_step': 1000,
 #         'source_filters': [],
 #         'destination_filters': [],
@@ -464,9 +464,9 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
             'name': col_data['name'],
             'src': col_data['table_alias'] + '.' + col_data['name'] if col_data.get('table_alias') else col_data['name'],
             'dest': col_data['name'],
-            'dtype': col_data['data_type'],
-            'unique_key': col_data['primary_key'],
-            'order_key': col_data['primary_key'],
+            'data_type': col_data['data_type'],
+            'unique_column': col_data['primary_key'],
+            'order_column': col_data['primary_key'],
             'hash_key': False,
             'insert': True,
             'direction': 'asc' if col_data['primary_key'] else None
@@ -478,9 +478,9 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
     #     'name': 'checksum',
     #     'src': None,
     #     'dest': 'checksum',
-    #     'dtype': 'varchar',
-    #     'unique_key': False,
-    #     'order_key': False,
+    #     'data_type': 'varchar',
+    #     'unique_column': False,
+    #     'order_column': False,
     #     'hash_key': True,
     #     'insert': True,
     #     'direction': None
@@ -519,7 +519,7 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
             }
         },
         'column_map': column_map,
-        'partition_key': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
+        'partition_column': universal_schema.primary_keys[0] if universal_schema.primary_keys else None,
         'partition_step': 1000,
         'source_filters': [],
         'destination_filters': [],
@@ -569,7 +569,7 @@ def _generate_suggested_config_from_columns(universal_schema, selected_columns: 
                     'columns': ['hash__'],
                     'transform': 'lambda x: x["hash__"]',
                     'dest': 'checksum',
-                    'dtype': 'varchar'
+                    'data_type': 'varchar'
                 }
             ]
         }
@@ -584,10 +584,10 @@ def _config_to_universal_schema(config: MigrationConfig):
     for col_mapping in config.column_map:
         column = UniversalColumn(
             name=col_mapping.dest or col_mapping.name,
-            data_type=UniversalDataType(col_mapping.dtype) if col_mapping.dtype else UniversalDataType.TEXT,
+            data_type=UniversalDataType(col_mapping.data_type) if col_mapping.data_type else UniversalDataType.TEXT,
             nullable=True,
-            primary_key=col_mapping.unique_key,  # For sync operations
-            unique=col_mapping.unique_key,
+            primary_key=col_mapping.unique_column,  # For sync operations
+            unique=col_mapping.unique_column,
             auto_increment=False
         )
         columns.append(column)

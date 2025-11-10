@@ -17,8 +17,8 @@ class CacheEntry:
     """Cache entry containing row hashes for a partition"""
     partition_id: str
     row_hashes: List[Dict[str, Any]]
-    unique_keys: List[str]
-    order_keys: List[str]
+    unique_columns: List[str]
+    order_columns: List[str]
     hash_algo: HashAlgo
     num_rows: int
 
@@ -102,16 +102,16 @@ class HashCache:
         end_offset = start_offset + intervals[level]
         
         # Convert offsets to actual values based on column type
-        column_type = partition.column_type
+        data_type = partition.data_type
         
-        if column_type in ("datetime", "timestamp"):
+        if data_type in ("datetime", "timestamp"):
             from datetime import datetime
             start_val = datetime.fromtimestamp(start_offset)
             end_val = datetime.fromtimestamp(end_offset)
-        elif column_type == "integer":
+        elif data_type == "integer":
             start_val = start_offset
             end_val = end_offset
-        elif column_type in ("uuid", "uuid_text", "uuid_text_dash"):
+        elif data_type in ("uuid", "uuid_text", "uuid_text_dash"):
             from ..utils.partition_generator import int_to_hex, END_HEX_INT
             import uuid
             
@@ -121,17 +121,17 @@ class HashCache:
             start_hex = int_to_hex(start_offset, pad_len=8) + "0" * 24
             end_hex = int_to_hex(end_offset, pad_len=8) + "0" * 24
             
-            if column_type == "uuid_text_dash":
+            if data_type == "uuid_text_dash":
                 start_val = str(uuid.UUID(start_hex))
                 end_val = str(uuid.UUID(end_hex))
-            elif column_type == "uuid_text":
+            elif data_type == "uuid_text":
                 start_val = start_hex
                 end_val = end_hex
-            elif column_type == "uuid":
+            elif data_type == "uuid":
                 start_val = uuid.UUID(start_hex)
                 end_val = uuid.UUID(end_hex)
         else:
-            raise ValueError(f"Unsupported column type: {column_type}")
+            raise ValueError(f"Unsupported column type: {data_type}")
             
         return start_val, end_val
     
@@ -153,7 +153,7 @@ class HashCache:
         return filtered_rows
     
     def _calculate_hash_from_cache(self, filtered_rows: List[Dict[str, Any]], 
-                                  unique_keys: List[str], order_keys: List[str], 
+                                  unique_columns: List[str], order_columns: List[str], 
                                   hash_algo: HashAlgo) -> str:
         """Calculate partition hash from cached row data"""
         if not filtered_rows:
@@ -161,12 +161,12 @@ class HashCache:
         
         if hash_algo == HashAlgo.HASH_MD5_HASH:
             # Sort rows by order keys for consistent hash
-            if order_keys:
+            if order_columns:
                 try:
-                    filtered_rows.sort(key=lambda x: tuple(x.get(k, '') for k in order_keys))
+                    filtered_rows.sort(key=lambda x: tuple(x.get(k, '') for k in order_columns))
                 except (KeyError, TypeError):
                     # Fallback to unique keys if order keys fail
-                    filtered_rows.sort(key=lambda x: tuple(x.get(k, '') for k in unique_keys))
+                    filtered_rows.sort(key=lambda x: tuple(x.get(k, '') for k in unique_columns))
             
             # Concatenate all hash values and compute MD5
             all_hashes = [row.get('hash__', '') for row in filtered_rows]
@@ -219,13 +219,13 @@ class HashCache:
                             cached_entry, partition, partition.partition_id
                         )
                         backend_column_schema = backend.column_schema
-                        unique_keys = [col.expr for col in backend_column_schema.unique_keys] if backend_column_schema.unique_keys else []
-                        order_keys = [col.expr for col, _ in backend_column_schema.order_keys] if backend_column_schema.order_keys else []
+                        unique_columns = [col.expr for col in backend_column_schema.unique_columns] if backend_column_schema.unique_columns else []
+                        order_columns = [col.expr for col, _ in backend_column_schema.order_columns] if backend_column_schema.order_columns else []
                         
                         
                         # Calculate hash from filtered rows
                         partition_hash = self._calculate_hash_from_cache(
-                            filtered_rows, unique_keys, order_keys, hash_algo
+                            filtered_rows, unique_columns, order_columns, hash_algo
                         )
                         
                         # Move to end (most recently used)
@@ -260,8 +260,8 @@ class HashCache:
                     cache_entry = CacheEntry(
                         partition_id=partition.partition_id,
                         row_hashes=row_hashes,
-                        unique_keys=[col.expr for col in backend.column_schema.unique_keys] if backend.column_schema.unique_keys else [],
-                        order_keys=[col.expr for col, _ in backend.column_schema.order_keys] if backend.column_schema.order_keys else [],
+                        unique_columns=[col.expr for col in backend.column_schema.unique_columns] if backend.column_schema.unique_columns else [],
+                        order_columns=[col.expr for col, _ in backend.column_schema.order_columns] if backend.column_schema.order_columns else [],
                         hash_algo=hash_algo,
                         num_rows=len(row_hashes)
                     )
@@ -322,18 +322,18 @@ class HashCache:
         self._cache_misses += 1
         return await fallback_fn()
     
-    async def fetch_row_hashes(self, unique_key_values: List[Dict[str, Any]], 
-                             unique_keys: List[str], partition_column: str,
+    async def fetch_row_hashes(self, unique_column_values: List[Dict[str, Any]], 
+                             unique_columns: List[str], partition_column: str,
                              partition_column_type: str, intervals: List[int],
                              parent_partition_id: Optional[str] = None, level: int = 0) -> List[Dict[str, Any]]:
         """
         Fetch row hashes for specific unique key values from cache if possible.
-        Calculates partition_id from partition_key and checks cache efficiently.
+        Calculates partition_id from partition_column and checks cache efficiently.
         """
         result = []
         
         with self._lock:
-            for target_row in unique_key_values:
+            for target_row in unique_column_values:
                 try:
                     # Calculate partition_id for this row
                     calculated_partition_id = self._calculate_partition_id_from_row(
@@ -358,9 +358,9 @@ class HashCache:
                     
                     if cached_entry:
                         # Search for the specific row in cached data
-                        target_key = tuple(target_row.get(k) for k in unique_keys)
+                        target_key = tuple(target_row.get(k) for k in unique_columns)
                         for cached_row in cached_entry.row_hashes:
-                            cached_key = tuple(cached_row.get(k) for k in unique_keys)
+                            cached_key = tuple(cached_row.get(k) for k in unique_columns)
                             if cached_key == target_key:
                                 result.append(cached_row)
                                 break
@@ -422,8 +422,8 @@ class HashCache:
                                 updated_entry = CacheEntry(
                                     partition_id=cached_entry.partition_id,
                                     row_hashes=remaining_rows,
-                                    unique_keys=cached_entry.unique_keys,
-                                    order_keys=cached_entry.order_keys,
+                                    unique_columns=cached_entry.unique_columns,
+                                    order_columns=cached_entry.order_columns,
                                     hash_algo=cached_entry.hash_algo,
                                     num_rows=len(remaining_rows)
                                 )

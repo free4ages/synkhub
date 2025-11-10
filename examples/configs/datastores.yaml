@@ -17,6 +17,34 @@ datastores:
       schema: 'public'
       max_connections: 10
       min_connections: 1
+  
+  local_starrocks:
+    type: 'starrocks'
+    description: 'Local StarRocks database for development and testing (HTTP)'
+    tags: ['development', 'starrocks', 'local', 'http']
+    connection:
+      host: '${STARROCK_HOST:localhost}'
+      port: ${STARROCK_PORT:9030}
+      user: '${STARROCK_USER:root}'
+      password: '${STARROCK_PASSWORD:}'
+      database: '${STARROCK_DB:synctool}'
+      schema: ''
+      max_connections: 10
+      min_connections: 1
+
+  # local_starrocks_mysql:
+  #   type: 'starrocks'
+  #   description: 'Local StarRocks database for development and testing (MySQL protocol)'
+  #   tags: ['development', 'starrocks', 'local', 'mysql']
+  #   connection:
+  #     host: '${STARROCK_MYSQL_HOST:localhost}'
+  #     port: ${STARROCK_MYSQL_PORT:9030}  # StarRocks MySQL protocol port
+  #     user: '${STARROCK_MYSQL_USER:root}'
+  #     password: '${STARROCK_MYSQL_PASSWORD:}'
+  #     database: '${STARROCK_MYSQL_DB:synctool}'
+  #     schema: ''
+  #     max_connections: 50  # Increased for better concurrency support
+  #     min_connections: 5   # Increased minimum for immediate availability
 
   # Production PostgreSQL instance
   prod_postgres:
@@ -62,52 +90,52 @@ datastores:
       max_connections: 10
       min_connections: 1
 
-  # ClickHouse instance
-  clickhouse_analytics:
-    type: 'clickhouse'
-    description: 'ClickHouse for high-performance analytics'
-    tags: ['clickhouse', 'analytics', 'olap']
-    connection:
-      host: '${CLICKHOUSE_HOST:localhost}'
-      port: ${CLICKHOUSE_PORT:9000}
-      user: '${CLICKHOUSE_USER:default}'
-      password: '${CLICKHOUSE_PASSWORD}'
-      database: '${CLICKHOUSE_DB:analytics}'
-      max_connections: 5
-      min_connections: 1
+  # # ClickHouse instance
+  # clickhouse_analytics:
+  #   type: 'clickhouse'
+  #   description: 'ClickHouse for high-performance analytics'
+  #   tags: ['clickhouse', 'analytics', 'olap']
+  #   connection:
+  #     host: '${CLICKHOUSE_HOST:localhost}'
+  #     port: ${CLICKHOUSE_PORT:9000}
+  #     user: '${CLICKHOUSE_USER:default}'
+  #     password: '${CLICKHOUSE_PASSWORD}'
+  #     database: '${CLICKHOUSE_DB:analytics}'
+  #     max_connections: 5
+  #     min_connections: 1
 
-  # DuckDB instance
-  local_duckdb:
-    type: 'duckdb'
-    description: 'Local DuckDB for development and testing'
-    tags: ['duckdb', 'local', 'embedded']
-    connection:
-      database: '${DUCKDB_PATH:./data/synctool.duckdb}'
-      max_connections: 1
-      min_connections: 1
+  # # DuckDB instance
+  # local_duckdb:
+  #   type: 'duckdb'
+  #   description: 'Local DuckDB for development and testing'
+  #   tags: ['duckdb', 'local', 'embedded']
+  #   connection:
+  #     database: '${DUCKDB_PATH:./data/synctool.duckdb}'
+  #     max_connections: 1
+  #     min_connections: 1
 
-  # S3 Object Storage
-  s3_data_lake:
-    type: 'object_storage'
-    description: 'S3 bucket for data lake storage'
-    tags: ['s3', 'object_storage', 'data_lake']
-    connection:
-      s3_bucket: '${S3_BUCKET:synctool-data-lake}'
-      s3_prefix: '${S3_PREFIX:synctool/}'
-      aws_access_key_id: '${AWS_ACCESS_KEY_ID}'
-      aws_secret_access_key: '${AWS_SECRET_ACCESS_KEY}'
-      region: '${AWS_REGION:us-east-1}'
+  # # S3 Object Storage
+  # s3_data_lake:
+  #   type: 'object_storage'
+  #   description: 'S3 bucket for data lake storage'
+  #   tags: ['s3', 'object_storage', 'data_lake']
+  #   connection:
+  #     s3_bucket: '${S3_BUCKET:synctool-data-lake}'
+  #     s3_prefix: '${S3_PREFIX:synctool/}'
+  #     aws_access_key_id: '${AWS_ACCESS_KEY_ID}'
+  #     aws_secret_access_key: '${AWS_SECRET_ACCESS_KEY}'
+  #     region: '${AWS_REGION:us-east-1}'
 
-  # MinIO Object Storage (S3-compatible)
-  minio_storage:
-    type: 'object_storage'
-    description: 'Local MinIO storage for development'
-    tags: ['minio', 'object_storage', 'local', 's3_compatible']
-    connection:
-      host: '${MINIO_HOST:localhost}'
-      port: ${MINIO_PORT:9000}
-      s3_bucket: '${MINIO_BUCKET:synctool}'
-      s3_prefix: '${MINIO_PREFIX:data/}'
-      aws_access_key_id: '${MINIO_ACCESS_KEY:minioadmin}'
-      aws_secret_access_key: '${MINIO_SECRET_KEY:minioadmin}'
-      region: '${MINIO_REGION:us-east-1}'
+  # # MinIO Object Storage (S3-compatible)
+  # minio_storage:
+  #   type: 'object_storage'
+  #   description: 'Local MinIO storage for development'
+  #   tags: ['minio', 'object_storage', 'local', 's3_compatible']
+  #   connection:
+  #     host: '${MINIO_HOST:localhost}'
+  #     port: ${MINIO_PORT:9000}
+  #     s3_bucket: '${MINIO_BUCKET:synctool}'
+  #     s3_prefix: '${MINIO_PREFIX:data/}'
+  #     aws_access_key_id: '${MINIO_ACCESS_KEY:minioadmin}'
+  #     aws_secret_access_key: '${MINIO_SECRET_KEY:minioadmin}'
+  #     region: '${MINIO_REGION:us-east-1}'

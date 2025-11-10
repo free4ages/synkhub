@@ -1,0 +1,384 @@
+name: 'postgres_postgres_join'
+description: 'Pipeline sync from Postgres to Postgres with cron expressions'
+sync_type: 'row-level'
+enabled: false
+
+
+
+# global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
+# This is an optional field. If not provided, every stage will have to define its own columns.
+max_concurrent_partitions: 1
+hash_algo: 'md5_sum_hash'
+strategies:
+  # Delta sync every 15 minutes
+  - name: 'delta'
+    type: 'delta'
+    default: true
+    primary_partitions:
+      - column: 'source_updated_at'
+        step: 1 # 2 hours
+        step_unit: 'day'
+    # secondary_partitions:
+    #   - column: 'source_updated_at'
+    #     step: 6 # 30 minutes
+    #     step_unit: 'hour'
+    
+
+    max_concurrent_partitions: 1
+    enabled: true
+    cron: '*/1 * * * *'  # Every 15 minutes
+    page_size: 10
+    # prevent_update_unless_changed: true
+    # use_pagination: true
+    # use_sub_partition: false
+  
+  # Hash sync every 2 hours
+  - name: 'hash'
+    type: 'hash'
+    default: true
+    enabled: true
+    primary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+    secondary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+    max_concurrent_partitions: 1
+    cron: '*/1 * * * *'  # Every 1 minute
+    page_size: 10
+    use_pagination: false
+    prevent_update_unless_changed: true
+    # use_sub_partition: true
+  
+  # Full sync daily at 3 AM
+  - name: 'full'
+    type: 'full'
+    default: true
+    enabled: true
+    primary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+    secondary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+    max_concurrent_partitions: 1
+    page_size: 10
+    cron: '0 3 * * *'  # Daily at 3 AM
+    use_pagination: false
+    # use_sub_partition: true
+
+pipeline_columns:
+  - name: 'order_id'
+    data_type: 'integer'
+    unique_column: true
+    order_column: true
+    direction: 'asc'
+  - name: 'order_date'
+    data_type: 'datetime'
+  - name: 'user_id'
+    data_type: 'integer'
+  - name: 'product_id'
+    data_type: 'integer'
+  - name: 'quantity'
+    data_type: 'decimal'
+    precision: 10
+    scale: 2
+  - name: 'price'
+    data_type: 'decimal'
+    precision: 10
+    scale: 2
+  - name: 'amount'
+    data_type: 'decimal'
+    precision: 15
+    scale: 2
+  - name: 'discount'
+    data_type: 'decimal'
+    precision: 5
+    scale: 2
+  - name: 'category'
+    data_type: 'uuid'
+  - name: 'source_created_at'
+    data_type: 'datetime'
+  - name: 'source_updated_at'
+    data_type: 'datetime'
+  - name: 'user_email'
+    data_type: 'varchar'
+    max_length: 100
+  - name: 'user_name'
+    data_type: 'varchar'
+    max_length: 200
+  - name: 'product_name'
+    data_type: 'varchar'
+    max_length: 150
+  - name: 'category_name'
+    data_type: 'varchar'
+    max_length: 100
+  - name: 'first_name'
+    data_type: 'varchar'
+    max_length: 50
+  - name: 'last_name'
+    data_type: 'varchar'
+    max_length: 50
+  - name: 'order_hash'
+    data_type: 'bigint'
+  - name: 'user_hash'
+    data_type: 'bigint'
+  - name: 'user_detail_hash'
+    data_type: 'bigint'
+  - name: 'product_hash'
+    data_type: 'bigint'
+  - name: 'category_hash'
+    data_type: 'bigint'
+
+backends:
+  - name: 'source_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders'
+    schema: 'public'
+    filters: 
+      - column: 'deleted'
+        operator: '='
+        value: false
+    columns:
+      - name: 'order_id'
+        expr: 'id'
+      - name: 'order_date'
+      - name: 'user_id'
+      - name: 'product_id'
+      - name: 'quantity'
+      - name: 'price'
+      - name: 'amount'
+      - name: 'discount'
+      - name: 'category'
+      - name: 'source_created_at'
+        expr: 'created_at'
+      - name: 'source_updated_at'
+        expr: 'updated_at'
+      - name: 'order_hash'
+        hash_key: true
+        virtual: true  # virtual means no real column exists in the database
+
+  - name: 'destination_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders'
+    schema: 'public_copy'
+    columns:
+      - name: 'order_id'
+      - name: 'order_date'
+      - name: 'user_id'
+      - name: 'product_id'
+      - name: 'quantity'
+      - name: 'price'
+      - name: 'amount'
+      - name: 'discount'
+      - name: 'category'
+      - name: 'source_created_at'
+      - name: 'source_updated_at'
+      - name: 'user_email'
+      - name: 'user_name'
+      - name: 'product_name'
+      - name: 'category_name'
+      - name: 'order_hash'  # This is the hash against which change detection will be done
+        hash_key: true
+      - name: 'user_hash'
+      - name: 'user_detail_hash'
+      - name: 'product_hash'
+      - name: 'category_hash'
+
+  - name: 'user_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'users_small'
+    schema: 'public'
+    columns:
+      - name: 'user_id'
+        expr: 'id'
+      - name: 'first_name'
+      - name: 'last_name'
+      - name: 'user_hash'
+        hash_key: true
+        virtual: true
+
+  - name: 'user_detail_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'user_profiles_small'
+    schema: 'public'
+    columns:
+      - name: 'user_id'
+      - name: 'user_email'
+        expr: 'email'
+      - name: 'user_detail_hash'
+        hash_key: true
+        virtual: true
+
+  - name: 'product_detail_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'product'
+    schema: 'public'
+    columns:
+      - name: 'product_id'
+        expr: 'id'
+      - name: 'product_name'
+        expr: 'name'
+      - name: 'product_hash'
+        hash_key: true
+        virtual: true
+
+
+  - name: 'category_detail_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'category'
+    schema: 'public'
+    columns:
+      - name: 'category'
+        expr: 'id'
+      - name: 'category_name'
+        expr: 'name'
+      - name: 'category_hash'
+        hash_key: true
+        virtual: true
+
+stages:
+  - name: 'partition_generator'
+    type: 'partition'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+
+  - name: 'change_detection'
+    type: 'change_detection'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+
+  - name: 'data_fetch'
+    type: 'data_fetch'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+
+  - name: 'hash_batcher'
+    type: 'batcher'
+    enabled: true
+    config:
+      target_batch_size: 10
+
+  - name: 'join_user'
+    type: 'join'
+    enabled: true
+    source:
+      name: user_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'user_id'
+          backend_key: 'user_id'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'redis'
+        url: 'redis://localhost:6379'
+        key_prefix: 'synctool:order:join:user:'
+        ttl: 60
+
+  - name: 'join_user_detail'
+    type: 'join'
+    enabled: true
+    source:
+      name: user_detail_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'user_id'
+          backend_key: 'user_id'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'memory'
+        policy: 'lru'
+        max_size: 1000
+
+  - name: 'join_product'
+    type: 'join'
+    enabled: true
+    source:
+      name: product_detail_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'product_id'
+          backend_key: 'product_id'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'memory'
+        policy: 'lru'
+        max_size: 100
+
+  - name: 'join_category'
+    type: 'join'
+    enabled: true
+    source:
+      name: category_detail_backend
+    config:
+      join_type: 'left'
+      join_on:
+        - data_key: 'category'
+          backend_key: 'category'
+          operator: '='
+      cache:
+        enabled: true
+        backend: 'memory'
+        policy: 'lru'
+        max_size: 1000
+
+  - name: 'transformation'
+    type: 'transform'
+    enabled: true
+    transformations:
+      - columns:
+          - first_name
+          - last_name
+        transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
+        name: 'user_name'
+        
+  - name: 'populate'
+    type: 'populate'
+    enabled: true
+    destination:
+      name: destination_backend
+    
+    # config:
+    #   batch_size: 10000
+    #   batch_timeout: 10
+    #   batch_timeout_unit: 'seconds'
+    #   batch_timeout_value: 10
+    #   batch_timeout_unit: 'seconds'
+  # - name: 'custom'
+  #   type: 'custom'
+  #   enabled: true
+  #   class_path: 'synctool.enrichment.enrichment_engine.EnrichmentEngine'
+  #   config:
+  #     transformations:
+  #       - columns:
+  #           - first_name
+  #           - last_name
+  #         transform: 'lambda x: x["last_name"].upper()'
+  #         dest: 'last_name'
+  #         data_type: 'varchar'
+

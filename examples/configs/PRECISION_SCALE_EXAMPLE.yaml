@@ -1,0 +1,223 @@
+# Example configuration showing how to use precision, scale, and max_length
+# for column definitions in pipeline configurations
+
+name: 'precision_scale_example'
+description: 'Example showing precision, scale, and max_length usage'
+sync_type: 'row-level'
+
+# Global column definitions with precision/scale/length specifications
+pipeline_columns:
+  # INTEGER - no precision/scale needed
+  - name: 'order_id'
+    data_type: 'integer'
+    unique_column: true
+    
+  # VARCHAR with custom length (default is 255)
+  - name: 'user_email'
+    data_type: 'varchar'
+    max_length: 100  # Will generate VARCHAR(100)
+    
+  - name: 'description'
+    data_type: 'varchar'
+    max_length: 500  # Will generate VARCHAR(500)
+    
+  - name: 'short_code'
+    data_type: 'varchar'
+    max_length: 10   # Will generate VARCHAR(10)
+  
+  # CHAR with custom length (default is 1)
+  - name: 'country_code'
+    data_type: 'char'
+    max_length: 2    # Will generate CHAR(2)
+    
+  # DECIMAL with precision and scale
+  - name: 'unit_price'
+    data_type: 'decimal'
+    precision: 10    # Total number of digits
+    scale: 2         # Decimal places
+    # Will generate: NUMERIC(10,2) for PostgreSQL, DECIMAL(10,2) for MySQL/StarRocks
+    
+  - name: 'tax_rate'
+    data_type: 'decimal'
+    precision: 5
+    scale: 4         # Will generate DECIMAL(5,4) - e.g., 0.1234
+    
+  - name: 'total_amount'
+    data_type: 'decimal'
+    precision: 15
+    scale: 2         # Will generate DECIMAL(15,2) - large amounts
+    
+  - name: 'percentage'
+    data_type: 'decimal'
+    precision: 5
+    scale: 2         # Will generate DECIMAL(5,2) - e.g., 100.00
+    
+  # DECIMAL without scale (just precision)
+  - name: 'count_value'
+    data_type: 'decimal'
+    precision: 10
+    # scale not specified - Will generate DECIMAL(10)
+    
+  # DECIMAL without precision or scale (uses defaults)
+  - name: 'default_decimal'
+    data_type: 'decimal'
+    # No precision/scale - uses database defaults
+    # PostgreSQL: NUMERIC, MySQL/StarRocks: DECIMAL(10,2)
+    
+  # Other types don't need precision/scale
+  - name: 'created_at'
+    data_type: 'timestamp'
+    
+  - name: 'is_active'
+    data_type: 'boolean'
+
+backends:
+  - name: 'source_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders'
+    schema: 'public'
+    columns:
+      - name: 'order_id'
+        expr: 'id'
+      - name: 'user_email'
+        # Inherits max_length: 100 from pipeline_columns
+      - name: 'description'
+        # Inherits max_length: 500 from pipeline_columns
+      - name: 'short_code'
+        # Inherits max_length: 10 from pipeline_columns
+      - name: 'country_code'
+        # Inherits max_length: 2 from pipeline_columns
+      - name: 'unit_price'
+        # Inherits precision: 10, scale: 2 from pipeline_columns
+      - name: 'tax_rate'
+        # Inherits precision: 5, scale: 4 from pipeline_columns
+      - name: 'total_amount'
+        # Inherits precision: 15, scale: 2 from pipeline_columns
+      - name: 'percentage'
+        # Inherits precision: 5, scale: 2 from pipeline_columns
+      - name: 'count_value'
+        # Inherits precision: 10 from pipeline_columns
+      - name: 'default_decimal'
+        # Uses default precision/scale
+      - name: 'created_at'
+      - name: 'is_active'
+
+  - name: 'destination_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders_copy'
+    schema: 'public_copy'
+    # You can also override precision/scale at the backend level
+    columns:
+      - name: 'order_id'
+      - name: 'user_email'
+        max_length: 150  # Override global definition
+      - name: 'description'
+        max_length: 1000 # Override to allow longer descriptions
+      - name: 'short_code'
+      - name: 'country_code'
+      - name: 'unit_price'
+        precision: 12    # Override precision
+        scale: 3         # Override scale
+      - name: 'tax_rate'
+      - name: 'total_amount'
+      - name: 'percentage'
+      - name: 'count_value'
+      - name: 'default_decimal'
+      - name: 'created_at'
+      - name: 'is_active'
+
+stages:
+  - name: 'data_fetch'
+    type: 'data_fetch'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+      
+  - name: 'populate'
+    type: 'populate'
+    enabled: true
+    destination:
+      name: destination_backend
+
+# DDL Generation Examples:
+#
+# For PostgreSQL:
+# ---------------
+# CREATE TABLE public_copy.orders_copy (
+#   order_id INTEGER NOT NULL,
+#   user_email VARCHAR(150),              -- Overridden length
+#   description VARCHAR(1000),            -- Overridden length
+#   short_code VARCHAR(10),
+#   country_code CHAR(2),
+#   unit_price NUMERIC(12,3),             -- Overridden precision/scale
+#   tax_rate NUMERIC(5,4),
+#   total_amount NUMERIC(15,2),
+#   percentage NUMERIC(5,2),
+#   count_value NUMERIC(10),
+#   default_decimal NUMERIC,
+#   created_at TIMESTAMP,
+#   is_active BOOLEAN,
+#   PRIMARY KEY (order_id)
+# );
+#
+# For MySQL:
+# ----------
+# CREATE TABLE `testdb`.`orders_copy` (
+#   `order_id` INT NOT NULL,
+#   `user_email` VARCHAR(150),
+#   `description` VARCHAR(1000),
+#   `short_code` VARCHAR(10),
+#   `country_code` CHAR(2),
+#   `unit_price` DECIMAL(12,3),
+#   `tax_rate` DECIMAL(5,4),
+#   `total_amount` DECIMAL(15,2),
+#   `percentage` DECIMAL(5,2),
+#   `count_value` DECIMAL(10),
+#   `default_decimal` DECIMAL(10,2),
+#   `created_at` TIMESTAMP,
+#   `is_active` BOOLEAN,
+#   PRIMARY KEY (`order_id`)
+# );
+#
+# For StarRocks:
+# --------------
+# CREATE TABLE `testdb`.`orders_copy` (
+#   `order_id` INT NOT NULL,
+#   `user_email` VARCHAR(150),
+#   `description` VARCHAR(1000),
+#   `short_code` VARCHAR(10),
+#   `country_code` CHAR(2),
+#   `unit_price` DECIMAL(12,3),
+#   `tax_rate` DECIMAL(5,4),
+#   `total_amount` DECIMAL(15,2),
+#   `percentage` DECIMAL(5,2),
+#   `count_value` DECIMAL(10),
+#   `default_decimal` DECIMAL(10,2),
+#   `created_at` DATETIME,
+#   `is_active` BOOLEAN,
+#   PRIMARY KEY (`order_id`)
+# ) ENGINE=OLAP
+# DISTRIBUTED BY HASH(`order_id`) BUCKETS 10
+# PROPERTIES (
+#   "replication_num" = "1"
+# );
+
+# Usage with CLI:
+# ---------------
+# Generate DDL without applying:
+#   synctool sync generate-ddl --job-name precision_scale_example
+#
+# Generate and apply DDL:
+#   synctool sync generate-ddl --job-name precision_scale_example --apply
+#
+# Usage with API:
+# ---------------
+# POST /api/jobs/precision_scale_example/generate-ddl
+# {
+#   "apply": false
+# }
+

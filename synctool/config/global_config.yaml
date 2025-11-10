@@ -1,0 +1,58 @@
+# Global configuration for ARQ Scheduler and Workers
+# This config is shared across scheduler and all workers
+
+# Redis configuration
+redis:
+  url: "redis://localhost:6379"
+  database: 0
+
+# Scheduler configuration
+scheduler:
+  schedule_interval: 10  # Seconds between scheduling checks
+  http_port: 8001  # Port for HTTP API server
+  lock_timeout: 3600  # Lock timeout in seconds (1 hour)
+
+# Storage paths (accessible by both scheduler and workers)
+storage:
+  metrics_dir: "./data/metrics"
+  logs_dir: "./data/logs"
+  state_dir: "./data/pipeline_states"
+  max_runs_per_strategy: 50  # Maximum runs to keep per strategy
+
+# Worker configuration
+worker:
+  max_jobs: 1  # Max concurrent jobs per worker
+  job_timeout: 3600  # Job timeout in seconds (1 hour)
+  
+# HTTP client configuration
+http:
+  timeout: 5.0  # HTTP request timeout in seconds
+  max_retries: 3  # Max retry attempts for failed requests
+
+# Log batching configuration
+log_batching:
+  batch_size: 50  # Number of log entries per batch
+  flush_interval: 2.0  # Flush interval in seconds
+  local_fallback: true  # Write to local files as backup
+
+# Configuration Manager - Define your config stores here
+config_manager:
+  stores:
+    # Primary file-based store
+    - name: "file_store"
+      type: "file"
+      is_primary: true
+      base_path: "./examples/configs"
+      use_metadata_files: true
+    
+    # Optional: Database-based store for config backup/sync
+    # - name: "db_store"
+    #   type: "database"
+    #   is_primary: false
+    #   db_type: "postgres"
+    #   db_host: "localhost"
+    #   db_port: 5432
+    #   db_user: "synctool"
+    #   db_password: "password"
+    #   db_name: "synctool_config"
+    #   table_prefix: "synctool_config"

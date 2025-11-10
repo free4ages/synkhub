@@ -62,18 +62,18 @@ async def run_example_sync():
             }
         },
         'column_map': [
-            {'name': 'user_id', 'src': 'u.id', 'dest': 'user_id', 'unique_key': True, 'order_key': True, 'dtype':'uuid', 'direction': 'asc'},
-            {'name':'first_name','src': 'u.first_name', 'dest': 'first_name', 'insert': False, 'dtype':'varchar'},
-            {'name':'created_at','src': 'u.created_at', 'dest': 'source_created_at', 'dtype':'datetime'},
-            {'name':'updated_at','src': 'u.updated_at', 'dest': 'source_updated_at', 'dtype':'datetime'},
-            {'name':'email','src': 'p.email', 'dest': 'email', 'dtype':'varchar'},
-            {'name':'bio','src': 'p.bio', 'dest': 'bio', 'dtype':'text'},
+            {'name': 'user_id', 'src': 'u.id', 'dest': 'user_id', 'unique_column': True, 'order_column': True, 'data_type':'uuid', 'direction': 'asc'},
+            {'name':'first_name','src': 'u.first_name', 'dest': 'first_name', 'insert': False, 'data_type':'varchar'},
+            {'name':'created_at','src': 'u.created_at', 'dest': 'source_created_at', 'data_type':'datetime'},
+            {'name':'updated_at','src': 'u.updated_at', 'dest': 'source_updated_at', 'data_type':'datetime'},
+            {'name':'email','src': 'p.email', 'dest': 'email', 'data_type':'varchar'},
+            {'name':'bio','src': 'p.bio', 'dest': 'bio', 'data_type':'text'},
             {'name':'last_name','src': 'u.last_name', 'dest': 'last_name', 'insert': False},
             {'name':'status','src': 'u.status', 'dest': 'status'},
             {'name':'name','src': None, 'dest': 'name'},
-            {'name':'checksum','src': None, 'dest': 'checksum', 'dtype':'varchar', 'hash_key':True}
+            {'name':'checksum','src': None, 'dest': 'checksum', 'data_type':'varchar', 'hash_key':True}
         ],
-        'partition_key': 'user_id',
+        'partition_column': 'user_id',
         'partition_step': 10,
         'strategies': [
             {

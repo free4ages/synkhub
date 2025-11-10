@@ -14,7 +14,10 @@ class PartitionType(Enum):
 
 class BackendType(Enum):
     POSTGRES = "postgres"
+    MYSQL = "mysql"
     CLICKHOUSE = "clickhouse"
+    STARROCKS = "starrocks"
+    STARROCKS_MYSQL = "starrocks_mysql"
     DUCKDB = "duckdb"
     REDIS = "redis"
     OBJECT_STORAGE = "object_storage"
@@ -28,6 +31,7 @@ class DataStatus(str,Enum):
     MODIFIED = "M"
     UNCHANGED = "N"
     DELETED = "D"
+    UNKNOWN = "U"
 
 
 class Capability(str, Enum):

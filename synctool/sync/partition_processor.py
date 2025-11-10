@@ -55,14 +55,14 @@ class PartitionProcessor:
         rows_detected = 0
         page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
 
-        if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
-            self.logger.warning("use_sub_partitions and use_pagination are both False, this will be  memory intensive")
+        if not self.strategy_config.use_sub_partition and not self.strategy_config.use_pagination:
+            self.logger.warning("use_sub_partition and use_pagination are both False, this will be  memory intensive")
 
-        if self.strategy_config.use_sub_partitions:
+        if self.strategy_config.use_sub_partition:
             sub_partition_config: PartitionConfig = PartitionConfig(
                 name="sub_partition_{pid}",
                 column=self.partition.column,
-                column_type=self.partition.column_type,
+                data_type=self.partition.data_type,
                 partition_step=self.strategy_config.sub_partition_step
             )
             sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
@@ -74,8 +74,8 @@ class PartitionProcessor:
         # if parition column is unique, we can skip pagination
         use_pagination = self.strategy_config.use_pagination
         # if page_size >= self.strategy_config.sub_partition_step:
-        #     unique_keys = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_keys]
-        #     if len(unique_keys) == 1 and unique_keys[0] == self.partition.column:
+        #     unique_columns = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_columns]
+        #     if len(unique_columns) == 1 and unique_columns[0] == self.partition.column:
         #         skip_pagination = True
         current_num = 0
         for sub_partition in sub_partitions:
@@ -143,14 +143,14 @@ class PartitionProcessor:
         rows_fetched = 0
         page_size = getattr(self.strategy_config, 'page_size', 1000) if self.strategy_config.use_pagination else None # Default to 1000 if not specified
 
-        if not self.strategy_config.use_sub_partitions and not self.strategy_config.use_pagination:
-            self.logger.warning("use_sub_partitions and use_pagination are both False, this will be memory intensive")
+        if not self.strategy_config.use_sub_partition and not self.strategy_config.use_pagination:
+            self.logger.warning("use_sub_partition and use_pagination are both False, this will be memory intensive")
         
-        if self.strategy_config.use_sub_partitions:
+        if self.strategy_config.use_sub_partition:
             sub_partition_config: PartitionConfig = PartitionConfig(
                 name="sub_partition_{pid}",
                 column=self.partition.column,
-                column_type=self.partition.column_type,
+                data_type=self.partition.data_type,
                 partition_step=self.strategy_config.sub_partition_step
             )
             sub_partition_generator: PartitionGenerator = PartitionGenerator(sub_partition_config)
@@ -257,17 +257,17 @@ class PartitionProcessor:
                     hash_query_count += 1
                     if src_hash_has_data:
                         rows_fetched += len(src_hashes)
-                    # find changed rows by comparing src_hashes and dest_hashes using unique_keys
+                    # find changed rows by comparing src_hashes and dest_hashes using unique_columns
                     # if src_hash_has_data, it means the data format belons to data backend, otherwise it belongs to state backend
 
-                    unique_keys = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_keys]
+                    unique_columns = [x.name for x in self.sync_engine.column_mapper.schemas["common"].unique_columns]
 
-                    # src_unique_keys = sync_engine.source_provider.data_unique_keys if src_hash_has_data else sync_engine.source_provider.state_unique_keys
-                    # dest_unique_keys = sync_engine.destination_provider.data_unique_keys if dest_hash_has_data else sync_engine.destination_provider.state_unique_keys
+                    # src_unique_columns = sync_engine.source_provider.data_unique_columns if src_hash_has_data else sync_engine.source_provider.state_unique_columns
+                    # dest_unique_columns = sync_engine.destination_provider.data_unique_columns if dest_hash_has_data else sync_engine.destination_provider.state_unique_columns
 
-                    # get each row status by comparing src_hashes and dest_hashes using unique_keys
+                    # get each row status by comparing src_hashes and dest_hashes using unique_columns
                     
-                    calculated_rows, statuses = calculate_row_status(src_hashes, dest_hashes, unique_keys)
+                    calculated_rows, statuses = calculate_row_status(src_hashes, dest_hashes, unique_columns)
                     for row, r_status in zip(calculated_rows, statuses):
                         if r_status == DataStatus.ADDED:
                             added.append(row)

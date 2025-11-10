@@ -28,27 +28,27 @@ column_map:
   - name: 'user_id'
     src: 'u.id'
     dest: 'user_id'
-    unique_key: true
-    order_key: true
-    dtype: 'uuid'
+    unique_column: true
+    order_column: true
+    data_type: 'uuid'
     direction: 'asc'
   - name: 'first_name'
     src: 'u.first_name'
     dest: 'first_name'
     insert: false
-    dtype: 'varchar'
+    data_type: 'varchar'
   - name: 'created_at'
     src: 'u.created_at'
     dest: 'source_created_at'
-    dtype: 'datetime'
+    data_type: 'datetime'
   - name: 'updated_at'
     src: 'u.updated_at'
     dest: 'source_updated_at'
-    dtype: 'datetime'
+    data_type: 'datetime'
   - name: 'email'
     src: 'p.email'
     dest: 'email'
-    dtype: 'varchar'
+    data_type: 'varchar'
   - name: 'last_name'
     src: 'u.last_name'
     dest: 'last_name'
@@ -62,14 +62,14 @@ column_map:
   - name: 'checksum'
     src: null
     dest: 'checksum'
-    dtype: 'varchar'
+    data_type: 'varchar'
     hash_key: true
   - name: 'bio'
     src: 'p.bio'
     dest: 'bio'
-    dtype: 'text'
+    data_type: 'text'
 
-partition_key: 'user_id'
+partition_column: 'user_id'
 partition_step: 90000000 # will create around 50 main partitions
 
 strategies:
@@ -82,7 +82,7 @@ strategies:
     cron: '*/15 * * * *'  # Every 15 minutes
     page_size: 100
     use_pagination: true
-    use_sub_partitions: false
+    use_sub_partition: false
   
   # Hash sync every 2 hours
   - name: 'hash'
@@ -112,9 +112,9 @@ enrichment:
         - last_name
       transform: 'lambda x: x["first_name"]+" "+x["last_name"]'
       dest: 'name'
-      dtype: 'integer'
+      data_type: 'integer'
     - columns:
         - hash__
       transform: 'lambda x: x["hash__"]'
       dest: 'checksum'
-      dtype: 'varchar'
+      data_type: 'varchar'

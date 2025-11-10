@@ -1,0 +1,251 @@
+name: 'postgres_postgres_aggregate_bounded'
+description: 'Pipeline sync for aggregation'
+sync_type: 'aggregate'   # aggregate or row-level
+enabled: false
+# global column definition that will be used everywhere. Every stage with columns field will inherit these columns.
+# This is an optional field. If not provided, every stage will have to define its own columns.
+max_concurrent_partitions: 1
+hash_algo: 'md5_sum_hash'
+strategies:
+  # Delta sync every 15 minutes
+  - name: 'delta'
+    type: 'delta'
+    default: true
+    primary_partitions:
+      - column: 'updated_at'
+        step: 1
+        step_unit: 'month'
+        bounded: true
+    delta_partitions:
+      - column: 'user_id'
+        type: 'value'
+        step: -1
+        data_type: 'integer'
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+        data_type: 'datetime'
+    max_concurrent_partitions: 1
+    enabled: true
+    cron: '*/1 * * * *'  # Every 15 minutes
+    page_size: 10
+    use_pagination: true
+    # use_sub_partition: false
+  
+  # Hash sync every 2 hours
+  - name: 'hash'
+    type: 'hash'
+    default: true
+    enabled: true
+    primary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+        data_type: 'datetime'
+      - column: 'user_id'
+        step: 50
+        data_type: 'integer'
+    secondary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'day'
+        data_type: 'datetime'
+      - column: 'user_id'
+        step: 5
+        data_type: 'integer'
+    max_concurrent_partitions: 1
+    cron: '*/1 * * * *'  # Every 2 hours
+    page_size: 10
+    use_pagination: false
+    # use_sub_partition: true
+    match_row_count: false
+  
+  # Full sync daily at 3 AM
+  - name: 'full'
+    type: 'full'
+    default: true
+    enabled: true
+    primary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+        data_type: 'datetime'
+        end: "'2025-09-01'"
+      - column: 'user_id'
+        step: 50
+        data_type: 'integer'
+    secondary_partitions:
+      - column: 'order_date'
+        step: 10
+        step_unit: 'day'
+        data_type: 'datetime'
+      - column: 'user_id'
+        step: 5
+        data_type: 'integer'
+    max_concurrent_partitions: 1
+    page_size: 10
+    cron: '0 3 * * *'  # Daily at 3 AM
+    use_pagination: false
+    # use_sub_partition: true
+  
+  - name: 'full_till_date'
+    type: 'full'
+    enabled: true
+    primary_partitions:
+      - column: 'order_date'
+        step: 1
+        step_unit: 'month'
+        data_type: 'datetime'
+        end: "'2025-09-01'"
+      - column: 'user_id'
+        step: 50
+        data_type: 'integer'
+    secondary_partitions:
+      - column: 'order_date'
+        step: 10
+        step_unit: 'day'
+        data_type: 'datetime'
+      - column: 'user_id'
+        step: 5
+        data_type: 'integer'
+    max_concurrent_partitions: 1
+    page_size: 10
+    cron: '0 3 * * *'  # Daily at 3 AM
+    use_pagination: false
+    # use_sub_partition: true
+
+backends:
+  - name: 'source_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'orders'
+    # alias: 'u'
+    schema: 'public'
+    # join:
+    #   - table: 'user_profiles_small'
+    #     alias: 'p'
+    #     'on': 'u.id = p.user_id'
+    #     type: 'left'
+    filters: []
+    columns:
+      - name: 'user_id'
+        data_type: 'integer'
+      - name: 'amount'
+        data_type: 'decimal'
+      - name: 'discount'
+        data_type: 'decimal'
+      - name: 'order_date'
+        data_type: 'datetime'
+      - name: 'updated_at'
+        data_type: 'datetime'
+
+  - name: 'destination_backend'
+    type: 'postgres'
+    datastore_name: 'local_postgres'
+    table: 'user_daily_orders_aggregate'
+    schema: 'public_copy'
+    columns:
+      - name: 'user_id'
+        data_type: 'integer'
+        unique_column: true
+      - name: 'updated_at'
+        expr: 'last_updated_at'
+        data_type: 'datetime'
+      - name: 'date'
+        data_type: 'date'
+        unique_column: true
+      - name: 'amount'
+        data_type: 'decimal'
+      - name: 'discount'
+        data_type: 'decimal'
+      - name: 'num_orders'
+        data_type: 'integer'
+      - name: 'checksum_int'
+        data_type: 'bigint'
+        hash_key: true
+      - name: 'order_date'
+        expr: 'date'
+        data_type: 'date'
+        virtual: true
+
+
+stages:
+  - name: 'partition_generator'
+    type: 'partition'
+    enabled: true
+    source:
+      name: source_backend
+      # columns:
+      #   - name: 'user_id'
+      #   - name: 'order_date'
+    destination:
+      name: destination_backend
+      # columns:
+      #   - name: 'user_id'
+      #   - name: 'order_date'
+  - name: 'change_detection'
+    type: 'change_detection'
+    enabled: true
+    source:
+      name: source_backend
+    destination:
+      name: destination_backend
+  - name: 'data_fetch'
+    type: 'data_fetch'
+    enabled: true
+    source:
+      name: source_backend
+      columns:
+        - name: 'user_id'
+        - name: 'updated_at'
+          expr: 'max(updated_at)'
+        - name: 'num_orders'
+          expr: 'count(1)'
+        - name: 'amount'
+          expr: 'sum(amount)'
+        - name: 'discount'
+          expr: 'sum(discount)'
+        - name: 'date'
+          expr: 'CAST(order_date AS DATE)'
+      group_by: ['user_id','date']
+    destination:
+      name: destination_backend
+      columns:
+        - name: 'user_id'
+        - name: 'amount'
+        - name: 'discount'
+        - name: 'date'
+        - name: 'checksum_int'
+        - name: 'updated_at'
+        - name: 'num_orders'
+  - name: 'data_batcher'
+    type: 'batcher'
+    enabled: true
+    config:
+      target_batch_size: 10
+
+  - name: 'populate'
+    type: 'populate'
+    enabled: true
+    destination:
+      name: destination_backend
+    
+    # config:
+    #   batch_size: 10000
+    #   batch_timeout: 10
+    #   batch_timeout_unit: 'seconds'
+    #   batch_timeout_value: 10
+    #   batch_timeout_unit: 'seconds'
+  # - name: 'custom'
+  #   type: 'custom'
+  #   enabled: true
+  #   class_path: 'synctool.enrichment.enrichment_engine.EnrichmentEngine'
+  #   config:
+  #     transformations:
+  #       - columns:
+  #           - first_name
+  #           - last_name
+  #         transform: 'lambda x: x["last_name"].upper()'
+  #         dest: 'last_name'
+  #         data_type: 'varchar'
+

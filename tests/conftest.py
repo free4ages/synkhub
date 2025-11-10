@@ -111,15 +111,15 @@ def base_sync_config() -> Dict[str, Any]:
             }
         },
         'column_map': [
-            {'name': 'user_id', 'src': 'u.id', 'dest': 'user_id', 'roles': ['partition_key','unique_key','order_key'], 'dtype':'int', 'order': 'asc'},
-            {'name':'first_name','src': 'u.first_name', 'dest': 'first_name', 'insert': False, 'dtype':'varchar'},
-            {'name':'last_name','src': 'u.last_name', 'dest': 'last_name', 'insert': False, 'dtype':'varchar'},
-            {'name':'created_at','src': 'u.created_at', 'dest': 'source_created_at', 'dtype':'datetime'},
-            {'name':'updated_at','src': 'u.updated_at', 'dest': 'source_updated_at', 'dtype':'datetime', 'roles': ['delta_key']},
-            {'name':'email','src': 'p.email', 'dest': 'email', 'dtype':'varchar'},
+            {'name': 'user_id', 'src': 'u.id', 'dest': 'user_id', 'roles': ['partition_column','unique_column','order_column'], 'data_type':'int', 'order': 'asc'},
+            {'name':'first_name','src': 'u.first_name', 'dest': 'first_name', 'insert': False, 'data_type':'varchar'},
+            {'name':'last_name','src': 'u.last_name', 'dest': 'last_name', 'insert': False, 'data_type':'varchar'},
+            {'name':'created_at','src': 'u.created_at', 'dest': 'source_created_at', 'data_type':'datetime'},
+            {'name':'updated_at','src': 'u.updated_at', 'dest': 'source_updated_at', 'data_type':'datetime', 'roles': ['delta_column']},
+            {'name':'email','src': 'p.email', 'dest': 'email', 'data_type':'varchar'},
             {'name':'status','src': 'u.status', 'dest': 'status'},
             {'name':'name','src': None, 'dest': 'name'},
-            {'name':'checksum','src': None, 'dest': 'checksum', 'dtype':'varchar', 'roles': ['hash_key']}
+            {'name':'checksum','src': None, 'dest': 'checksum', 'data_type':'varchar', 'roles': ['hash_key']}
         ],
         'enrichment': {
             'enabled': True,

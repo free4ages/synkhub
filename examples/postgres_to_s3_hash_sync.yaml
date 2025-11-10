@@ -49,8 +49,8 @@ sync_job:
       schema: public
     table: sync_state_users
     column_mapping:
-      unique_key: ["user_id"]
-      partition_key: "user_id"
+      unique_column: ["user_id"]
+      partition_column: "user_id"
       row_hash: "row_hash"
       block_hash: "block_hash"
 
@@ -64,8 +64,8 @@ sync_job:
       region: us-east-1
     table: sync_state_users.parquet
     column_mapping:
-      unique_key: ["user_id"]
-      partition_key: "last_modified_at"
+      unique_column: ["user_id"]
+      partition_column: "last_modified_at"
       row_hash: "row_hash"
       block_hash: "block_hash"
 
@@ -78,7 +78,7 @@ sync_job:
   strategies:
     - name: hash
       column: u.id
-      column_type: int
+      data_type: int
       partition_step: 10000
       sub_partition_step: 10
 

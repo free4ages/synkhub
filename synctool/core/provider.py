@@ -45,6 +45,9 @@ class Provider:
         elif backend_config.type == "starrocks":
             from ..backend.starrocks import StarRocksBackend
             return StarRocksBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
+        elif backend_config.type == "starrocks_mysql":
+            from ..backend.starrocks_mysql import StarRocksMySQLBackend
+            return StarRocksMySQLBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
         elif backend_config.type == "duckdb":
             return DuckDBBackend(backend_config, column_schema, logger=self.logger, data_storage=self.data_storage)
         else:
@@ -65,15 +68,15 @@ class Provider:
         return []
     
     @property
-    def data_unique_keys(self) -> List[str]:
+    def data_unique_columns(self) -> List[str]:
         if self.data_backend.column_schema:
-            return [col.name for col in self.data_backend.column_schema.unique_keys]
+            return [col.name for col in self.data_backend.column_schema.unique_columns]
         return []
     
     @property
-    def state_unique_keys(self) -> List[str]:
+    def state_unique_columns(self) -> List[str]:
         if self.state_backend.column_schema:
-            return [col.name for col in self.state_backend.column_schema.unique_keys]
+            return [col.name for col in self.state_backend.column_schema.unique_columns]
         return []
     
     @property
@@ -89,39 +92,39 @@ class Provider:
         return None
     
     @property
-    def data_partition_key(self) -> Optional[str]:
-        if self.data_backend.column_schema and self.data_backend.column_schema.partition_key:
-            return self.data_backend.column_schema.partition_key.name
+    def data_partition_column(self) -> Optional[str]:
+        if self.data_backend.column_schema and self.data_backend.column_schema.partition_column:
+            return self.data_backend.column_schema.partition_column.name
         return None
     
     @property
-    def state_partition_key(self) -> Optional[str]:
-        if self.state_backend.column_schema and self.state_backend.column_schema.partition_key:
-            return self.state_backend.column_schema.partition_key.name
+    def state_partition_column(self) -> Optional[str]:
+        if self.state_backend.column_schema and self.state_backend.column_schema.partition_column:
+            return self.state_backend.column_schema.partition_column.name
         return None
 
     @property
-    def data_order_key(self) -> Optional[str]:
-        if self.data_backend.column_schema and self.data_backend.column_schema.order_key:
-            return self.data_backend.column_schema.order_key[0].name
+    def data_order_column(self) -> Optional[str]:
+        if self.data_backend.column_schema and self.data_backend.column_schema.order_column:
+            return self.data_backend.column_schema.order_column[0].name
         return None
 
     @property
-    def state_order_key(self) -> Optional[str]:
-        if self.state_backend.column_schema and self.state_backend.column_schema.order_key:
-            return self.state_backend.column_schema.order_key[0].name
+    def state_order_column(self) -> Optional[str]:
+        if self.state_backend.column_schema and self.state_backend.column_schema.order_column:
+            return self.state_backend.column_schema.order_column[0].name
         return None
     
     @property
-    def data_delta_key(self) -> Optional[str]:
-        if self.data_backend.column_schema and self.data_backend.column_schema.delta_key:
-            return self.data_backend.column_schema.delta_key.name
+    def data_delta_column(self) -> Optional[str]:
+        if self.data_backend.column_schema and self.data_backend.column_schema.delta_column:
+            return self.data_backend.column_schema.delta_column.name
         return None
     
     @property
-    def state_delta_key(self) -> Optional[str]:
-        if self.state_backend.column_schema and self.state_backend.column_schema.delta_key:
-            return self.state_backend.column_schema.delta_key.name
+    def state_delta_column(self) -> Optional[str]:
+        if self.state_backend.column_schema and self.state_backend.column_schema.delta_column:
+            return self.state_backend.column_schema.delta_column.name
         return None
     
     
@@ -216,10 +219,10 @@ class Provider:
         #     if with_data is True:
         #         # Fetch data separately from data backend if needed
         #         data = await self.data_backend.fetch_partition_data(partition, with_hash=False, hash_algo=hash_algo)
-        #         unique_keys = self.column_schema.unique_keys
-        #         hash_map = {(h[x.name] for x in unique_keys): h for h in hashes}
+        #         unique_columns = self.column_schema.unique_columns
+        #         hash_map = {(h[x.name] for x in unique_columns): h for h in hashes}
         #         for d in data:
-        #             key = tuple(d[x.name] for x in unique_keys)
+        #             key = tuple(d[x.name] for x in unique_columns)
         #             if key in hash_map:
         #                 d["hash__"] = hash_map[key]["hash__"]
         #         return data, True
@@ -227,8 +230,8 @@ class Provider:
         #         return hashes, has_data
         hashes= await self.state_backend.fetch_partition_row_hashes(partition, hash_algo=hash_algo)
     
-    async def update_data(self, data: List[Dict], unique_keys: List[str]) -> int:
-        return await self.data_backend.update_data(data, unique_keys)
+    async def update_data(self, data: List[Dict], unique_columns: List[str]) -> int:
+        return await self.data_backend.update_data(data, unique_columns)
     
     async def get_partition_bounds(self) -> Tuple[Any, Any]:
         return await self.data_backend.get_partition_bounds()

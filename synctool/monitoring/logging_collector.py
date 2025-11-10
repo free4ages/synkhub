@@ -8,10 +8,11 @@ from .logs_storage import LogsStorage
 class RunLogsHandler(logging.Handler):
     """Logging handler that forwards records to LogsStorage for a specific job run."""
 
-    def __init__(self, logs_storage: LogsStorage, job_name: str, run_id: str):
+    def __init__(self, logs_storage: LogsStorage, job_name: str, strategy_name: str, run_id: str):
         super().__init__()
         self.logs_storage = logs_storage
         self.job_name = job_name
+        self.strategy_name = strategy_name
         self.run_id = run_id
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -22,6 +23,7 @@ class RunLogsHandler(logging.Handler):
             logger_name = record.name
             self.logs_storage.append_log(
                 job_name=self.job_name,
+                strategy_name=self.strategy_name,
                 run_id=self.run_id,
                 timestamp=timestamp,
                 level=level,
@@ -40,9 +42,9 @@ class LoggingCollector:
         self.logs_storage = logs_storage
         self._handler: Optional[RunLogsHandler] = None
 
-    def start_job_run(self, job_name: str, run_id: str, level: int = logging.DEBUG) -> None:
+    def start_job_run(self, job_name: str, strategy_name: str, run_id: str, level: int = logging.DEBUG) -> None:
         self.stop_job_run()  # Ensure any existing handler is removed first
-        handler = RunLogsHandler(self.logs_storage, job_name, run_id)
+        handler = RunLogsHandler(self.logs_storage, job_name, strategy_name, run_id)
         handler.setLevel(level)
         # Simple formatter; message already includes logger/time via storage
         handler.setFormatter(logging.Formatter("%(message)s"))

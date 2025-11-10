@@ -15,9 +15,11 @@ class MetricsCollector:
         self.current_metrics: Optional[JobRunMetrics] = None
         self.logger = logging.getLogger(__name__)
     
-    def start_job_run(self, job_name: str, strategy_name: str) -> str:
+    def start_job_run(self, job_name: str, strategy_name: str, run_id: Optional[str] = None) -> str:
         """Start tracking a new job run"""
-        run_id = str(uuid.uuid4())
+        # Use provided run_id or generate new one
+        if run_id is None:
+            run_id = str(uuid.uuid4())
         
         self.current_metrics = JobRunMetrics(
             job_name=job_name,
@@ -27,8 +29,8 @@ class MetricsCollector:
             status="running"
         )
         
-        # Save initial metrics
-        self.storage.save_metrics(self.current_metrics)
+        # DON'T save initial metrics - only save at finish
+        # self.storage.save_metrics(self.current_metrics)  # COMMENTED OUT
         self.logger.info(f"Started tracking metrics for job {job_name}, run {run_id}")
         
         return run_id
@@ -42,8 +44,8 @@ class MetricsCollector:
             if hasattr(self.current_metrics, key):
                 setattr(self.current_metrics, key, value)
         
-        # Save updated metrics
-        self.storage.save_metrics(self.current_metrics)
+        # DON'T save on every update - only save at finish
+        # self.storage.save_metrics(self.current_metrics)  # COMMENTED OUT
     
     def finish_job_run(self, status: str = "completed", error_message: Optional[str] = None) -> None:
         """Finish tracking the current job run"""
@@ -55,7 +57,7 @@ class MetricsCollector:
         if error_message:
             self.current_metrics.error_message = error_message
         
-        # Save final metrics
+        # ONLY save final metrics ONCE
         self.storage.save_metrics(self.current_metrics)
         self.logger.info(f"Finished tracking metrics for run {self.current_metrics.run_id}")
         

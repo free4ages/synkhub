@@ -1,22 +1,86 @@
 import math
 import io
 from datetime import timedelta, datetime
+import asyncpg
 
 from typing import Any, List, Optional, Dict, Tuple
 
 from ..core.models import StrategyConfig
 from ..core.models import BackendConfig, DataStorage
 from ..core.enums import HashAlgo, Capability
-from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table
+from ..core.query_models import BlockHashMeta, BlockNameMeta, Field, Filter, Join, Query, RowHashMeta, Table, GroupHashMeta
 from ..utils.sql_builder import SqlBuilder
 from ..backend.base_backend import SqlBackend
-from ..core.models import Partition, BackendConfig, Column
+from ..core.models import MultiDimensionPartition, BackendConfig, Column, DimensionPartitionConfig
 from ..core.column_mapper import ColumnSchema
 from ..core.schema_models import UniversalSchema, UniversalColumn, UniversalDataType
-from ..utils.hash_cache import HashCache
+# from ..utils.hash_cache import HashCache
+from ..pipeline.base import DataBatch
+from ..utils.partition_generator import calculate_offset
 
+DATA_EXCEPTIONS = (
+    asyncpg.exceptions.UniqueViolationError,
+    asyncpg.exceptions.ForeignKeyViolationError,
+    asyncpg.exceptions.CheckViolationError,
+    asyncpg.exceptions.NotNullViolationError,
+    asyncpg.exceptions.DataError,
+    asyncpg.exceptions.InvalidTextRepresentationError,
+)
+
+SYSTEM_EXCEPTIONS = (
+    asyncpg.exceptions.ConnectionDoesNotExistError,
+    asyncpg.exceptions.ConnectionFailureError,
+    asyncpg.exceptions.InterfaceError,
+    asyncpg.exceptions.TooManyConnectionsError,
+    asyncpg.exceptions.PostgresConnectionError,
+    asyncpg.exceptions.CannotConnectNowError,
+)
 
 MAX_PG_PARAMS = 31000
+
+
+def build_parition_id_expr(partition_column_expr: str, partition_column_type: str, parent_offset: int, step: int, step_unit: str) -> str:
+    if partition_column_type == UniversalDataType.INTEGER:
+        # move start to nearest multiple of step
+        expr = f"(({partition_column_expr} - {parent_offset}) / {step})::text"
+    elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        if step_unit == "timestamp":
+            # expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column_expr}) - {parent_offset}) / {step})::int::text"
+            expr = f"((EXTRACT(EPOCH FROM {partition_column_expr})::bigint - {parent_offset}) / {step})::text"
+        elif step_unit == "minute":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})::bigint)/60 - {parent_offset}) / {step})::text"
+        elif step_unit == "hour":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})::bigint)/3600 - {parent_offset}) / {step})::text"
+        elif step_unit == "day":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})::bigint)/86400 - {parent_offset}) / {step})::text"
+        elif step_unit == "week":
+            expr = f"(((EXTRACT(EPOCH FROM {partition_column_expr})- EXTRACT(EPOCH FROM TIMESTAMPTZ '1970-01-05 00:00:00+00'))::bigint/ 604800 - {parent_offset}) / {step})::text"
+        elif step_unit == "month":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 12+ (EXTRACT(MONTH FROM {partition_column_expr})::int - 1))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "quarter":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 4+ ((EXTRACT(MONTH FROM {partition_column_expr})::int - 1) / 3))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "year":
+            expr = f"(((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970)::bigint-{parent_offset})/{step})::text"
+        else:
+            raise ValueError(f"Unsupported step unit: {step_unit}")
+    elif partition_column_type in (UniversalDataType.DATE):
+        if step_unit == "day":
+            expr = f"((({partition_column_expr} - DATE '1970-01-01')::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "week":
+            expr = f"(((({partition_column_expr} - DATE '1970-01-05') / 7)::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "month":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 12+ (EXTRACT(MONTH FROM {partition_column_expr})::int - 1))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "quarter":
+            expr = f"((((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970) * 4+ ((EXTRACT(MONTH FROM {partition_column_expr})::int - 1) / 3))::bigint-{parent_offset})/{step})::text"
+        elif step_unit == "year":
+            expr = f"(((EXTRACT(YEAR FROM {partition_column_expr})::int - 1970)::bigint-{parent_offset})/{step})::text"
+        else:
+            raise ValueError(f"Unsupported step unit: {step_unit}")
+    elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        expr = f"FLOOR((('x' || substr({partition_column_expr}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{step})::text"
+    else:
+        raise ValueError(f"Unsupported partition column type: {partition_column_type}")
+    return expr
 
 class PostgresBackend(SqlBackend):
     """PostgreSQL implementation of Backend"""
@@ -30,80 +94,75 @@ class PostgresBackend(SqlBackend):
         self._connection = None
         # Scale up cache size for better performance
         cache_size = getattr(config, 'cache_size', 5000)
-        self.hash_cache = HashCache(max_size=cache_size)
+        # self.hash_cache = HashCache(max_rows=cache_size)
+        self.hash_cache = None
     
     def _get_default_schema(self) -> str:
         return 'public'
     
     async def connect(self):
-        """Connect to PostgreSQL database"""
-        # import pdb; pdb.set_trace()
-        try:
-            import asyncpg
-            database_name = self.connection_config.database or self.connection_config.dbname
-            self.logger.info(f"Connecting to PostgreSQL: host={self.connection_config.host}, port={self.connection_config.port}, user={self.connection_config.user}, database={database_name}")
-            self._connection = await asyncpg.create_pool(
-                host=self.connection_config.host,
-                port=self.connection_config.port,
-                user=self.connection_config.user,
-                password=self.connection_config.password,
-                database=database_name
-            )
-        except ImportError:
-            raise ImportError("asyncpg is required for PostgreSQL provider")
+        """Connect to PostgreSQL database via DataStore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        await self._datastore.connect(self.logger)
+
     
     async def disconnect(self):
-        """Disconnect from PostgreSQL database"""
-        if self._connection:
-            await self._connection.close()
+        """Disconnect from PostgreSQL database via DataStore"""
+        if self._datastore:
+            await self._datastore.disconnect(self.logger)
     
     async def execute_query(self, query: str, params: Optional[list] = None, action: Optional[str] = 'select') -> List[Dict]:
         """Execute query and return DataFrame"""
-        self.logger.info(f"Executing query: {query} with params: {params}")
-        # print(query)
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        
+        # self.logger.info(f"Executing query: {query} with params: {params}")
+        
+        result = await self._datastore.execute_query(query, params, action)
+        
+        # Handle different return types based on action
         if action == 'select':
-            rows = await self._connection.fetch(query, *(params if params else []))
-            return [dict(row) for row in rows]
-        elif action == 'delete':
-            return await self._connection.execute(query, *(params if params else []))
+            return result  # Already a list of dictionaries
         else:
-            raise ValueError(f"Invalid action: {action}")
+            return result  # Number of affected rows
 
     
     async def has_data(self) -> bool:
         """Check if the provider has any data"""
         table = self._get_full_table_name(self.table)
-        query = f"SELECT COUNT(*) as count FROM {table} LIMIT 1"
+        query = f"SELECT * FROM {table} LIMIT 1"
         result = await self.execute_query(query)
-        return result[0]['count'] > 0
+        return len(result) > 0
     
-    async def get_last_sync_point(self) -> Any:
+    async def get_last_sync_point(self, column: str) -> Any:
         """Get the last sync point for a specific column type"""
-        if not self.column_schema or not self.column_schema.delta_key:
-            raise ValueError("No delta key configured in column schema")
-        column = self.column_schema.delta_key.expr
+        # import pdb; pdb.set_trace()
+        # if not self.column_schema or not self.column_schema.delta_column:
+        #     raise ValueError("No delta key configured in column schema")
+        column = self.column_schema.column(column).expr
         table = self._get_full_table_name(self.table)
         query = f"SELECT MAX({column}) as last_sync_point FROM {table}"
         result = await self.execute_query(query)
         return result[0]['last_sync_point']
     
-    async def get_max_sync_point(self) -> Any:
+    async def get_max_sync_point(self, column: str) -> Any:
         """Get the maximum sync point for a specific column type"""
-        if not self.column_schema or not self.column_schema.delta_key:
-            raise ValueError("No delta key configured in column schema")
-        column = self.column_schema.delta_key.expr
-        column_type = self.column_schema.delta_key.dtype
+        # if not self.column_schema or not self.column_schema.delta_column:
+        #     raise ValueError("No delta key configured in column schema")
+        column = self.column_schema.column(column).expr
         table = self._get_full_table_name(self.table)
         query = f"SELECT MAX({column}) as max_sync_point FROM {table}"
         result = await self.execute_query(query)
         max_sync_point = result[0]['max_sync_point']
         return max_sync_point
     
-    async def get_partition_bounds(self) -> Tuple[Any, Any]:
+    async def get_partition_bounds(self, column: str) -> Tuple[Any, Any]:
         """Get min and max values for partition column"""
-        if not self.column_schema or not self.column_schema.partition_key:
-            raise ValueError("No partition key configured in column schema")
-        partition_column = self.column_schema.partition_key.expr
+        # import pdb; pdb.set_trace()
+        # if not self.column_schema or not self.column_schema.partition_column:
+        #     raise ValueError("No partition key configured in column schema")
+        partition_column = self.column_schema.column(column).expr
         table = self._get_full_table_name(self.table)
         query = f"SELECT MIN({partition_column}) as min_val, MAX({partition_column}) as max_val FROM {table}"
         result = await self.execute_query(query)
@@ -112,10 +171,17 @@ class PostgresBackend(SqlBackend):
 
     
 
-    async def fetch_partition_data(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    async def fetch_partition_data(self, partition: MultiDimensionPartition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
         """Fetch data based on partition bounds with optional pagination"""
         if page_size is not None or offset is not None:
-            order_by = [f"{c.expr} {d}" for c,d in self.column_schema.order_keys] if self.column_schema.order_keys else [f"{self.column_schema.partition_key.expr} asc"]
+            if self.column_schema.order_columns:
+                order_by = [f"{c.expr} {c.direction}" for c in self.column_schema.order_columns]
+            else:
+                order_by = []
+                for d in partition.dimensions:
+                    column = self.column_schema.column(d.column)
+                    if column:
+                        order_by.append(f"{column.expr} asc")
         else:
             order_by = None
         query = self._build_partition_data_query(partition, order_by=order_by, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
@@ -123,77 +189,88 @@ class PostgresBackend(SqlBackend):
         # print(sql, params)
         return await self.execute_query(sql, params)
     
-    async def fetch_delta_data(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
-        """Fetch data based on partition bounds with optional pagination"""
+    # async def fetch_delta_data(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Fetch data based on partition bounds with optional pagination"""
 
-        if not self.column_schema or not self.column_schema.delta_key:
-            raise ValueError("No delta key configured in column schema")
-        if page_size is not None or offset is not None:
-            order_by = [f"{c.expr} {d}" for c,d in self.column_schema.order_keys] if self.column_schema.order_keys else [f"{self.column_schema.partition_key.expr} asc"]
-        else:
-            order_by = None
-        partition_column = self.column_schema.delta_key.name
-        query = self._build_partition_data_query(partition, partition_column=partition_column, order_by=order_by, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
-        sql, params = self._build_sql(query)
-        return await self.execute_query(sql, params)
+    #     if not self.column_schema or not self.column_schema.delta_column:
+    #         raise ValueError("No delta key configured in column schema")
+    #     if page_size is not None or offset is not None:
+    #         order_by = [f"{c.expr} {d}" for c,d in self.column_schema.order_columns] if self.column_schema.order_columns else [f"{self.column_schema.partition_column.expr} asc"]
+    #     else:
+    #         order_by = None
+    #     partition_column = self.column_schema.delta_column.name
+    #     query = self._build_partition_data_query(partition, partition_column=partition_column, order_by=order_by, with_hash=with_hash, hash_algo=hash_algo, page_size=page_size, offset=offset)
+    #     sql, params = self._build_sql(query)
+    #     return await self.execute_query(sql, params)
     
-    async def fetch_partition_row_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch partition row hashes from destination along with state columns"""
-        # Use HashCache for optimized fetching
-        fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo)
-        return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo)
+    # async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None, skip_cache=False) -> List[Dict]:
+    #     """Fetch partition row hashes from destination along with state columns"""
+    #     # Use HashCache for optimized fetching
+    #     fallback_fn = lambda: self._fetch_partition_row_hashes_direct(partition, hash_algo, page_size, offset)
+    #     if self.hash_cache and not skip_cache:
+    #         return await self.hash_cache.fetch_partition_row_hashes(partition, self, fallback_fn, hash_algo, page_size=page_size, offset=offset)
+    #     else:
+    #         return await fallback_fn()
     
-    async def fetch_child_partition_hashes(self, partition: Optional[Partition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch child partition hashes"""
-        # Use HashCache for optimized fetching
-        if partition is None:
-            raise ValueError("Partition is required for hash cache operations")
+    # async def fetch_child_partition_hashes(self, partition: Optional[MultiDimensionPartition] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    #     """Fetch child partition hashes"""
+    #     # Use HashCache for optimized fetching
+    #     if partition is None:
+    #         raise ValueError("MultiDimensionPartition is required for hash cache operations")
         
-        if not self.column_schema:
-            raise ValueError("Column schema is required for hash cache operations")
+    #     if not self.column_schema:
+    #         raise ValueError("Column schema is required for hash cache operations")
         
-        fallback_fn = lambda: self._fetch_child_partition_hashes_direct(partition, with_hash, hash_algo)
-        return await self.hash_cache.fetch_child_partition_hashes(
-            partition, self, fallback_fn, hash_algo
-        )
+    #     fallback_fn = lambda: self._fetch_child_partition_hashes_direct(partition, with_hash, hash_algo)
+    #     if self.hash_cache:
+    #         return await self.hash_cache.fetch_child_partition_hashes(
+    #             partition, self, fallback_fn, hash_algo
+    #         )
+    #     else:
+    #         return await fallback_fn()
     
-    async def _fetch_child_partition_hashes_direct(self, partition: Partition, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    async def fetch_child_partition_hashes(self, partition: MultiDimensionPartition, partition_dimensions: List[DimensionPartitionConfig] = None, with_hash=False, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
         """Direct database fetch for child partition hashes - used by HashCache"""
-        query: Query = self._build_partition_hash_query(partition, hash_algo)
+        query: Query = self._build_partition_hash_query(partition, hash_algo, partition_dimensions=partition_dimensions)
         query = self._rewrite_query(query)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)
     
-    async def _fetch_partition_row_hashes_direct(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Direct database fetch for partition row hashes - used by HashCache"""
-        return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo)
+    # async def fetch_partition_row_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH, page_size: Optional[int] = None, offset: Optional[int] = None) -> List[Dict]:
+    #     """Direct database fetch for partition row hashes - used by HashCache"""
+    #     return await self.fetch_partition_data(partition, with_hash=True, hash_algo=hash_algo, page_size=page_size, offset=offset)
     
-    def mark_partition_complete(self, partition_id: str):
-        """Mark partition as complete and evict from cache"""
-        self.hash_cache.mark_partition_complete(partition_id)
+    # def mark_partition_complete(self, partition_id: str):
+    #     """Mark partition as complete and evict from cache"""
+    #     if self.hash_cache:
+    #         self.hash_cache.mark_partition_complete(partition_id)
     
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get hash cache statistics"""
-        return self.hash_cache.get_cache_stats()
+    # def get_cache_stats(self) -> Dict[str, Any]:
+    #     """Get hash cache statistics"""
+    #     if self.hash_cache:
+    #         return self.hash_cache.get_cache_stats()
+    #     else:
+    #         return {}
     
-    def clear_cache(self):
-        """Clear the hash cache"""
-        self.hash_cache.clear_cache()
+    # def clear_cache(self):
+    #     """Clear the hash cache"""
+    #     if self.hash_cache:
+    #         self.hash_cache.clear_cache()
     
-    async def fetch_row_hashes(self, unique_key_values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Fetch row hashes for specific unique key values from cache if possible"""
-        if not self.column_schema:
-            return []
+    # async def fetch_row_hashes(self, unique_column_values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #     """Fetch row hashes for specific unique key values from cache if possible"""
+    #     if not self.column_schema:
+    #         return []
         
-        unique_keys = [col.name for col in self.column_schema.unique_keys] if self.column_schema.unique_keys else []
-        partition_column = self.column_schema.partition_key.name if self.column_schema.partition_key else ""
-        partition_column_type = str(self.column_schema.partition_key.dtype) if self.column_schema.partition_key else ""
+    #     unique_columns = [col.name for col in self.column_schema.unique_columns] if self.column_schema.unique_columns else []
+    #     partition_column = self.column_schema.partition_column.name if self.column_schema.partition_column else ""
+    #     partition_column_type = str(self.column_schema.partition_column.data_type) if self.column_schema.partition_column else ""
         
-        # This would need intervals from the partition context - for now return empty
-        # In practice, this would be called with proper context from partition processor
-        return []
+    #     # This would need intervals from the partition context - for now return empty
+    #     # In practice, this would be called with proper context from partition processor
+    #     return []
     
-    async def delete_partition_data(self, partition: Partition) -> int:
+    async def delete_partition_data(self, partition: MultiDimensionPartition) -> int:
         """Delete partition data from destination"""
         filters = self._build_filter_query()
         column = self.column_schema.column(partition.column)
@@ -205,102 +282,123 @@ class PostgresBackend(SqlBackend):
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params, action='delete')
     
-    async def delete_rows(self, rows: List[Dict], partition: Partition, strategy_config: StrategyConfig) -> int:
-        """Delete rows from destination"""
-        filters = self._build_filter_query()
-        unique_keys = self.column_schema.unique_keys
-        unique_keys_values = [tuple(row[key] for key in unique_keys) for row in rows]
-        filters += [
-            Filter(column=self.column_schema.column(key).expr, operator='in', value=unique_keys_values)
-            for key in unique_keys
-        ]
-        query = Query(action='delete', table=self._build_table_query(), filters=filters)
-        sql, params = self._build_sql(query)
-        return await self.execute_query(sql, params)
+    # async def delete_rows(self, rows: List[Dict], partition: MultiDimensionPartition, strategy_config: StrategyConfig) -> int:
+    #     """Delete rows from destination"""
+    #     filters = self._build_filter_query()
+    #     unique_columns = self.column_schema.unique_columns
+    #     unique_columns_values = [tuple(row[key] for key in unique_columns) for row in rows]
+    #     filters += [
+    #         Filter(column=self.column_schema.column(key).expr, operator='in', value=unique_columns_values)
+    #         for key in unique_columns
+    #     ]
+    #     query = Query(action='delete', table=self._build_table_query(), filters=filters)
+    #     sql, params = self._build_sql(query)
+    #     return await self.execute_query(sql, params)
         
-    async def insert_partition_data(
-        self,
-        data: List[Dict],
-        partition: Optional[Partition] = None,
-        batch_size: int = 5000,
-        upsert: bool = True
-    ) -> int:      
-        return await self.insert_data(data, partition, batch_size, upsert=upsert)
+    # async def insert_partition_data(
+    #     self,
+    #     data: List[Dict],
+    #     partition: Optional[MultiDimensionPartition] = None,
+    #     batch_size: int = 5000,
+    #     upsert: bool = True
+    # ) -> int:      
+    #     return await self.insert_data(data, partition, batch_size, upsert=upsert)
     
-    async def fetch_partition_hashes(self, partition: Partition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
-        """Fetch partition row hashes from destination along with state columns"""
-        return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo)
+    # async def fetch_partition_hashes(self, partition: MultiDimensionPartition, hash_algo=HashAlgo.HASH_MD5_HASH) -> List[Dict]:
+    #     """Fetch partition row hashes from destination along with state columns"""
+    #     return await self.data_backend.fetch_partition_row_hashes(partition, hash_algo)
     
-    async def insert_delta_data(
-        self,
-        data: List[Dict],
-        partition: Optional[Partition] = None,
-        batch_size: int = 5000,
-        upsert: bool = True
-    ) -> int:
-        return await self.insert_data(data, partition, batch_size, upsert=upsert)
+    # async def insert_delta_data(
+    #     self,
+    #     data: List[Dict],
+    #     partition: Optional[MultiDimensionPartition] = None,
+    #     batch_size: int = 5000,
+    #     upsert: bool = True
+    # ) -> int:
+    #     return await self.insert_data(data, partition, batch_size, upsert=upsert)
     
-    async def delete_partition_data(self, partition: Optional[Partition] = None) -> int:
+    async def delete_partition_data(self, partition: Optional[MultiDimensionPartition] = None) -> int:
         """Delete partition data from destination"""
         filters = self._build_filter_query()
-        filters += [
-            Filter(column=self.column_mapping.partition_key, operator='>=', value=partition.start), 
-            Filter(column=self.column_mapping.partition_key, operator='<', value=partition.end)
-        ]
+        partition_filters = self.build_partition_filter_query(partition)
+        filters.extend(partition_filters)
+        # filters += [
+        #     Filter(column=self.column_mapping.partition_column, operator='>=', value=partition.start), 
+        #     Filter(column=self.column_mapping.partition_column, operator='<', value=partition.end)
+        # ]
         query = Query(action='delete', table=self._build_table_query(), filters=filters)
         sql, params = self._build_sql(query)
         return await self.execute_query(sql, params)    
 
     def _build_group_name_expr(self, field: Field) -> str:
         metadata: BlockNameMeta = field.metadata
-        level = metadata.level # level is the current level for which we are building the group name
-        intervals = metadata.intervals
-        partition_column = metadata.partition_column
-        partition_column_type = metadata.partition_column_type
-        parent_partition_id = metadata.parent_partition_id
-        ids = [int(i) for i in parent_partition_id.split('-')] if parent_partition_id else []
-        parent_offset = sum([intervals[i]*ids[i] for i in range(len(ids))]) if len(ids) > 0 else 0
+        parent_partition = metadata.parent_partition
+        partition_dimensions = metadata.partition_dimensions
+        parent_partition_id = parent_partition.partition_id
+        partition_bounds = parent_partition.get_partition_bounds()
+        partition_bounds_dict = {bound.column: bound for bound in partition_bounds}
+        id_parts = [f"'{parent_partition_id}'"] if parent_partition_id else []
+        for dimension in partition_dimensions:
+            start = partition_bounds_dict[dimension.column].start
+            step = dimension.step
+            step_unit = dimension.step_unit
+            partition_column = self.column_schema.column(dimension.column)
+            partition_column_type = dimension.data_type or partition_column.data_type
+            partition_column_expr = partition_column.expr
+            parent_offset,_ = calculate_offset(start, step_unit, partition_column_type)
+            expr = build_parition_id_expr(partition_column_expr, partition_column_type, parent_offset, step, step_unit)
+            id_parts.append(expr)
+        expr = f" || '-' || ".join(id_parts)
+        return expr
 
-        if partition_column_type == UniversalDataType.INTEGER:
-            # For integer partition columns, we divide by the interval
-            # segments = []
-            # for idx in range(level+1):
-            #     fct = intervals[idx]
-            #     if idx == 0:
-            #         expr = f"FLOOR({partition_column} / {intervals[idx]})"
-            #     else:
-            #         prev = intervals[idx-1]
-            #         expr = f"FLOOR(mod({partition_column}, {prev}) / {intervals[idx]})"
-            #     segments.append(f"{expr}::text")
-            # return " || '-' || ".join(segments)
-            expr = f"FLOOR(({partition_column} - {parent_offset}) / {intervals[level]})::text"
-            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+        # level = metadata.level # level is the current level for which we are building the group name
+        # intervals = metadata.intervals
+        # partition_column = metadata.partition_column
+        # partition_column_type = metadata.partition_column_type
+        # parent_partition_id = metadata.parent_partition_id
+        # ids = [int(i) for i in parent_partition_id.split('-')] if parent_partition_id else []
+        # parent_offset = sum([intervals[i]*ids[i] for i in range(len(ids))]) if len(ids) > 0 else 0
 
-        elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
-            # segments = []
-            # for idx in range(level+1):
-            #     fct = intervals[idx]
-            #     if idx == 0:
-            #         expr = f"FLOOR(EXTRACT(EPOCH FROM {partition_column}) / {fct})"
-            #     else:
-            #         prev = intervals[idx-1]
-            #         expr = f"FLOOR(mod(EXTRACT(EPOCH FROM {partition_column}) ,{prev}) / {fct})"
+        # if partition_column_type == UniversalDataType.INTEGER:
+        #     # For integer partition columns, we divide by the interval
+        #     # segments = []
+        #     # for idx in range(level+1):
+        #     #     fct = intervals[idx]
+        #     #     if idx == 0:
+        #     #         expr = f"FLOOR({partition_column} / {intervals[idx]})"
+        #     #     else:
+        #     #         prev = intervals[idx-1]
+        #     #         expr = f"FLOOR(mod({partition_column}, {prev}) / {intervals[idx]})"
+        #     #     segments.append(f"{expr}::text")
+        #     # return " || '-' || ".join(segments)
+        #     expr = f"FLOOR(({partition_column} - {parent_offset}) / {intervals[level]})::text"
+        #     return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
-            #     segments.append(f"{expr}::text")
-            # return " || '-' || ".join(segments)
-            expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column}) - {parent_offset}) / {intervals[level]})::text"
-            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+        # elif partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        #     # segments = []
+        #     # for idx in range(level+1):
+        #     #     fct = intervals[idx]
+        #     #     if idx == 0:
+        #     #         expr = f"FLOOR(EXTRACT(EPOCH FROM {partition_column}) / {fct})"
+        #     #     else:
+        #     #         prev = intervals[idx-1]
+        #     #         expr = f"FLOOR(mod(EXTRACT(EPOCH FROM {partition_column}) ,{prev}) / {fct})"
 
-        elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
-            # get current number from parent partition id
+        #     #     segments.append(f"{expr}::text")
+        #     # return " || '-' || ".join(segments)
+        #     expr = f"FLOOR((EXTRACT(EPOCH FROM {partition_column}) - {parent_offset}) / {intervals[level]})::text"
+        #     return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
-            expr = f"FLOOR((('x' || substr({partition_column}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{intervals[level]})::text"
-            return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
+        # elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        #     # get current number from parent partition id
+
+        #     expr = f"FLOOR((('x' || substr({partition_column}::text, 1, 8))::bit(32)::bigint - {parent_offset})/{intervals[level]})::text"
+        #     return f"'{parent_partition_id}' || '-' || {expr}" if parent_partition_id else expr
 
 
 
-        else:
-            raise ValueError(f"Unsupported partition type: {partition_column}")
+        # else:
+        #     raise ValueError(f"Unsupported partition type: {partition_column}")
 
     def _build_rowhash_expr(self, field: Field) -> str:
         """Build row hash expression for PostgreSQL"""
@@ -310,10 +408,22 @@ class PostgresBackend(SqlBackend):
             expr = metadata.hash_column
         elif metadata.strategy == HashAlgo.MD5_SUM_HASH:
             concat = ",".join([f"{x.expr}" for x in metadata.fields])
-            expr = f"(('x'||substr(md5(CONCAT({concat})),1,8))::bit(32)::int)"
+            expr = f"(('x'||substr(md5(CONCAT({concat})),1,8))::bit(32)::bigint)"
         elif metadata.strategy == HashAlgo.HASH_MD5_HASH:
             concat = ",".join([f"{x.expr}" for x in metadata.fields])
             expr = f"md5(CONCAT({concat}))"
+        return expr
+    
+    def _build_grouphash_expr(self, field: Field) -> str:
+        metadata: GroupHashMeta = field.metadata
+        expr=""
+        if metadata.hash_column:
+            expr = f"sum({metadata.hash_column})"
+        elif metadata.strategy == HashAlgo.MD5_SUM_HASH:
+            row_expr = self._build_rowhash_expr(field)
+            expr = f"sum({row_expr})"
+        else:
+            raise ValueError(f"Unsupported hash strategy: {metadata.strategy} for aggregation") 
         return expr
     
     def _build_blockhash_expr(self, field: Field):
@@ -322,7 +432,7 @@ class PostgresBackend(SqlBackend):
         if metadata.strategy == HashAlgo.MD5_SUM_HASH:
             expr = f"sum({inner_expr}::numeric)"
         elif metadata.strategy == HashAlgo.HASH_MD5_HASH:
-            expr = f"md5(string_agg({inner_expr},'' order by {metadata.order_column}))"
+            expr = f"md5(string_agg(LEFT({inner_expr},8),'' order by {metadata.order_column}))"
         return expr
 
 
@@ -339,6 +449,9 @@ class PostgresBackend(SqlBackend):
             elif f.type == "rowhash":
                 expr = self._build_rowhash_expr(f)
                 rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
+            elif f.type == "grouphash":
+                expr = self._build_grouphash_expr(f)
+                rewritten.append(Field(expr=expr, alias=f.alias, type='column'))
             else:
                 rewritten.append(f)
         query.select = rewritten
@@ -349,72 +462,84 @@ class PostgresBackend(SqlBackend):
         q = self._rewrite_query(query)
         return SqlBuilder.build(q, dialect='asyncpg')
 
-    def _build_partition_hash_query(self, partition: Partition, hash_algo: HashAlgo) -> Query:
+    def _build_partition_hash_query(self, partition: MultiDimensionPartition, hash_algo: HashAlgo, partition_dimensions: List[DimensionPartitionConfig] = None) -> Query:
         """Build partition hash query for PostgreSQL"""
-        start = partition.start
-        end = partition.end
-        partition_column: Column = self.column_schema.partition_key
-        partition_column_type: UniversalDataType | None = partition_column.dtype
+        # start = partition.start
+        # end = partition.end
+        # partition_column: Column = self.column_schema.column(partition.column)
+        # partition_column_type: UniversalDataType | None = partition_column.data_type
 
-        hash_column: Column | None = self.column_schema.hash_key
-        # partition_column = self.column_schema.partition_key
-        order_keys: list[tuple[Column, str]] | None = self.column_schema.order_keys
-        order_column_expr = ",".join([f"{c.expr} {d}" for c,d in order_keys]) if order_keys else None
+        hash_column: Column | None = self.db_column_schema.hash_key
+        # partition_column = self.column_schema.partition_column
+        order_columns: list[tuple[Column, str]] | None = self.db_column_schema.order_columns
+        order_column_expr = ",".join([f"{c.expr} {c.direction}" for c in order_columns]) if order_columns else None
         
-        partition_hash_field = Field(
-            expr=f"{partition_column.expr}",
+        partition_hash_column = Field(
+            expr="",
+            #expr=f"{partition_column.expr}",
             alias="partition_hash",
             metadata=BlockHashMeta(
                 order_column=order_column_expr,
-                partition_column = partition_column.expr,
-                hash_column = hash_column.expr if hash_column else None,
+                # partition_column = partition_column.expr,
+                hash_column = hash_column.expr if hash_column and not hash_column.virtual else None,
                 strategy = hash_algo,
-                fields = [Field(expr=x.expr) for x in self.column_schema.columns_to_fetch()],
-                partition_column_type=partition_column_type
+                fields = [Field(expr=x.expr) for x in self.db_column_schema.columns_to_hash()],
+                # partition_column_type=partition_column_type
             ),
             type="blockhash"
         )
 
         partition_id_field = Field(expr=f"partition_id", alias="partition_id", metadata=BlockNameMeta(
-            level=partition.level + 1,
-            intervals=partition.intervals,
-            partition_column_type=partition_column_type,
             strategy=hash_algo,
-            partition_column=partition_column.expr,
-            parent_partition_id=partition.partition_id
+            partition_dimensions=partition_dimensions,
+            parent_partition=partition
+            # level=partition.level + 1,
+            # intervals=partition.intervals,
+            # partition_column_type=partition_column_type,
+            # strategy=hash_algo,
+            # partition_column=partition_column.expr,
+            # parent_partition_id=partition.partition_id
         ), type="blockname")
 
         select = [
             Field(expr='COUNT(1)', alias='num_rows', type='column'),
-            partition_hash_field,
+            partition_hash_column,
             partition_id_field
         ]
         grp_field = Field(expr="partition_id", type="column")
 
-        filters = []
-        if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
-            ]
-        elif partition_column_type == UniversalDataType.INTEGER:
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
-            ]
-        elif partition_column_type == UniversalDataType.VARCHAR:
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
-            ]
-        elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
-            filters += [
-                Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
-                Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
-            ]
-        else:
-            raise ValueError(f"Unsupported partition type: {partition_column_type}")
-        filters += self._build_filter_query()
+        # partition_bounds = partition.get_partition_bounds()
+        filters = self.build_partition_filter_query(partition)
+        # filters = []
+        # for bound in partition_bounds:
+        #     column = self.db_column_schema.column(bound.column)
+        #     filters += [
+        #         Filter(column=column.expr, operator='>=', value=column.cast(bound.start)), 
+        #         Filter(column=column.expr, operator='<', value=column.cast(bound.end))
+        #     ]
+        # if partition_column_type in (UniversalDataType.DATETIME, UniversalDataType.TIMESTAMP):
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
+        #     ]
+        # elif partition_column_type == UniversalDataType.INTEGER:
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<', value=partition_column.cast(end))
+        #     ]
+        # elif partition_column_type == UniversalDataType.VARCHAR:
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
+        #     ]
+        # elif partition_column_type in (UniversalDataType.UUID, UniversalDataType.UUID_TEXT, UniversalDataType.UUID_TEXT_DASH):
+        #     filters += [
+        #         Filter(column=partition_column.expr, operator='>=', value=partition_column.cast(start)), 
+        #         Filter(column=partition_column.expr, operator='<=', value=partition_column.cast(end))
+        #     ]
+        # else:
+        #     raise ValueError(f"Unsupported partition type: {partition_column_type}")
+        filters.extend(self._build_filter_query())
         query = Query(
             select=select,
             table=self._build_table_query(),
@@ -431,7 +556,7 @@ class PostgresBackend(SqlBackend):
     # async def insert_data(
     #     self,
     #     data: List[Dict],
-    #     partition: Optional[Partition] = None,
+    #     partition: Optional[MultiDimensionPartition] = None,
     #     batch_size: int = 5000,
     #     upsert: bool = True
     # ) -> int:
@@ -440,18 +565,18 @@ class PostgresBackend(SqlBackend):
     #     if not data:
     #         return 0
 
-    #     column_keys = [col.expr for col in self.column_schema.columns_to_insert()]
+    #     column_keys = [col.expr for col in self.column_schema.insert()]
 
     #     total_upserted = 0
-    #     unique_keys = [col.expr for col in self.column_schema.unique_keys]
-    #     non_conflict_cols = [col for col in column_keys if col not in unique_keys]
+    #     unique_columns = [col.expr for col in self.column_schema.unique_columns]
+    #     non_conflict_cols = [col for col in column_keys if col not in unique_columns]
 
-    #     if not unique_keys:
+    #     if not unique_columns:
     #         raise ValueError("Unique keys must be defined in column_mapping")
 
     #     table_name = self._get_full_table_name(self.table)
     #     insert_cols = ', '.join(f'"{col}"' for col in column_keys)
-    #     conflict_target = ', '.join(f'"{col}"' for col in unique_keys)
+    #     conflict_target = ', '.join(f'"{col}"' for col in unique_columns)
     #     update_clause = ', '.join(f'"{col}" = EXCLUDED."{col}"' for col in non_conflict_cols)
 
     #     if upsert:
@@ -490,26 +615,27 @@ class PostgresBackend(SqlBackend):
 
     async def insert_data(
         self,
-        data: List[Dict],
-        partition: Optional["Partition"] = None,
-        batch_size: int = 5000,
+        data_batch: DataBatch,
         upsert: bool = True
     ) -> int:
         """Efficiently upserts data into PostgreSQL using asyncpg with fallback error handling."""
+        # import pdb; pdb.set_trace()
+        data = data_batch.data
         data = self._process_pre_insert_data(data)
+        
         if not data:
             return 0
 
         column_keys = [col.expr for col in self.column_schema.columns_to_insert()]
-        unique_keys = [col.expr for col in self.column_schema.unique_keys]
-        if not unique_keys:
+        unique_columns = [col.expr for col in self.column_schema.unique_columns]
+        if not unique_columns:
             raise ValueError("Unique keys must be defined in column_mapping")
 
-        non_conflict_cols = [col for col in column_keys if col not in unique_keys]
+        non_conflict_cols = [col for col in column_keys if col not in unique_columns]
         table_name = self._get_full_table_name(self.table)
 
         insert_cols = ', '.join(f'"{col}"' for col in column_keys)
-        conflict_target = ', '.join(f'"{col}"' for col in unique_keys)
+        conflict_target = ', '.join(f'"{col}"' for col in unique_columns)
         update_clause = ', '.join(f'"{col}" = EXCLUDED."{col}"' for col in non_conflict_cols)
 
         # Base query templates
@@ -525,19 +651,22 @@ class PostgresBackend(SqlBackend):
                 INSERT INTO {table_name} ({insert_cols})
                 VALUES {{}}
             """
-
+        # import pdb; pdb.set_trace()
         # Calculate safe batch size for direct parameterized insert
         max_safe_rows = MAX_PG_PARAMS // len(column_keys)
-        safe_batch_size = min(batch_size, max_safe_rows)
+        safe_batch_size = min(len(data), max_safe_rows)
 
-        total_upserted = 0
-        async with self._connection.acquire() as conn:
+        success, failed = 0, 0
+        connection_pool = await self._datastore.get_connection_pool()
+        # import pdb; pdb.set_trace()
+        async with connection_pool.acquire() as conn:
             for i in range(0, len(data), safe_batch_size):
                 batch = data[i:i + safe_batch_size]
 
                 # If batch fits in safe parameter size → normal multi-row insert
                 if len(batch) * len(column_keys) <= MAX_PG_PARAMS:
                     try:
+                        # Multi-row insert
                         values = [tuple(row[col] for col in column_keys) for row in batch]
                         placeholders = ', '.join(
                             f"({', '.join(f'${j + r * len(column_keys) + 1}' for j in range(len(column_keys)))})"
@@ -547,10 +676,16 @@ class PostgresBackend(SqlBackend):
                         final_query = base_insert_sql.format(placeholders)
                         # print(final_query, flat_params)
                         await conn.execute(final_query, *flat_params)
-                        total_upserted += len(batch)
+                        success += len(batch)
                         continue
+                    except DATA_EXCEPTIONS as e:
+                        self.logger.warning(f"Batch data error → fallback to COPY or per-row insert: {e}")
+                    except SYSTEM_EXCEPTIONS as e:
+                        self.logger.error(f"System/connection error → not recoverable: {e}")
+                        raise
                     except Exception as e:
-                        self.logger.error(f"Batch insert failed, falling back to per-row insert: {e}")
+                        self.logger.error(f"Unexpected error in batch insert: {e}")
+                        raise  # safer to rethrow unknowns
 
                 # If batch too big or failed → use COPY into temp table
                 temp_table = f"temp_upsert_{int(math.floor(i))}"
@@ -589,9 +724,9 @@ class PostgresBackend(SqlBackend):
                             INSERT INTO {table_name} ({insert_cols})
                             SELECT {insert_cols} FROM {temp_table}
                         """)
-                    total_upserted += len(batch)
+                    success += len(batch)
 
-                except Exception as e:
+                except DATA_EXCEPTIONS as e:
                     self.logger.error(f"Temp table COPY failed, inserting rows individually: {e}")
                     # Per-row insert to skip bad rows
                     for row in batch:
@@ -599,169 +734,53 @@ class PostgresBackend(SqlBackend):
                             placeholders = ', '.join(f"${j+1}" for j in range(len(column_keys)))
                             final_query = base_insert_sql.format(f"({placeholders})")
                             await conn.execute(final_query, *(row[col] for col in column_keys))
-                            total_upserted += 1
+                            success += 1
+                        except DATA_EXCEPTIONS as row_err:
+                            row['failed__']=True
+                            failed += 1
+                            self.logger.error(f"Row rejected due to data error {row}: {row_err}")
+                        except SYSTEM_EXCEPTIONS as row_sys_err:
+                            self.logger.error(f"System error while inserting row {row}: {row_sys_err}")
+                            raise
                         except Exception as row_err:
-                            self.logger.error(f"Failed to insert row {row}: {row_err}")
+                            self.logger.error(f"Row rejected due to unexpected error {row}: {row_err}. Not recoverable.")
+                            raise
+                except SYSTEM_EXCEPTIONS as e:
+                    self.logger.error(f"System error during COPY fallback: {e}")
+                    raise
+                except Exception as e:
+                    self.logger.error(f"Unexpected error during COPY fallback: {e}")
+                    raise
 
-        return total_upserted
+        return success, failed
     
-    # Schema extraction and DDL generation methods
+    # Schema extraction and DDL generation methods - delegate to datastore
     async def extract_table_schema(self, table_name: str) -> UniversalSchema:
-        """Extract PostgreSQL table schema"""
-        schema_name = self.schema or 'public'
-        full_table = f"{schema_name}.{table_name}"
-        
-        # Get column information
-        columns_query = """
-        SELECT 
-            column_name,
-            data_type,
-            character_maximum_length,
-            is_nullable,
-            column_default,
-            ordinal_position,
-            is_identity
-        FROM information_schema.columns 
-        WHERE table_schema = $1 AND table_name = $2
-        ORDER BY ordinal_position
-        """
-        columns_data = await self.execute_query(columns_query, [schema_name, table_name])
-        
-        # Get primary key information
-        pk_query = """
-        SELECT kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu 
-            ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.constraint_type = 'PRIMARY KEY' 
-            AND tc.table_schema = $1 
-            AND tc.table_name = $2
-        """
-        pk_result = await self.execute_query(pk_query, [schema_name, table_name])
-        primary_keys = [row['column_name'] for row in pk_result]
-        
-        # Get index information
-        indexes_query = """
-        SELECT 
-            indexname,
-            indexdef
-        FROM pg_indexes 
-        WHERE schemaname = $1 AND tablename = $2
-        """
-        indexes = await self.execute_query(indexes_query, [schema_name, table_name])
-        
-        # Convert to universal format
-        columns = []
-        for col_data in columns_data:
-            universal_type = self.map_source_type_to_universal(col_data['data_type'])
-            
-            column = UniversalColumn(
-                name=col_data['column_name'],
-                data_type=universal_type,
-                nullable=col_data['is_nullable'] == 'YES',
-                primary_key=col_data['column_name'] in primary_keys,
-                unique=False,  # Would need additional query for unique constraints
-                auto_increment=col_data['is_identity'] == 'YES',
-                default_value=col_data['column_default'],
-                max_length=col_data['character_maximum_length']
-            )
-            columns.append(column)
-        
-        return UniversalSchema(
-            table_name=table_name,
-            schema_name=schema_name,
-            database_name=self.connection_config.database,
-            columns=columns,
-            primary_keys=primary_keys,
-            indexes=indexes
+        """Extract table schema - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return await self._datastore._datastore_impl.extract_table_schema(
+            table_name, 
+            self.schema
         )
     
     def generate_create_table_ddl(self, schema: UniversalSchema, target_table_name: Optional[str] = None) -> str:
-        """Generate PostgreSQL CREATE TABLE DDL"""
-        table_name = target_table_name or schema.table_name
-        if schema.schema_name:
-            table_name = f"{schema.schema_name}.{table_name}"
-        
-        columns = []
-        for col in schema.columns:
-            col_def = f"{col.name} {self.map_universal_type_to_target(col.data_type)}"
-            
-            if not col.nullable:
-                col_def += " NOT NULL"
-            
-            if col.default_value:
-                col_def += f" DEFAULT {col.default_value}"
-            
-            columns.append(col_def)
-        
-        # Add primary key constraint
-        if schema.primary_keys:
-            pk_columns = ', '.join(schema.primary_keys)
-            columns.append(f"PRIMARY KEY ({pk_columns})")
-        
-        return f"""CREATE TABLE {table_name} (
-  {', '.join(columns)}
-);"""
+        """Generate DDL - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return self._datastore._datastore_impl.generate_create_table_ddl(
+            schema, 
+            target_table_name
+        )
     
     def map_source_type_to_universal(self, source_type: str) -> UniversalDataType:
-        """Map PostgreSQL type to universal type"""
-        type_mapping = {
-            'integer': UniversalDataType.INTEGER,
-            'int': UniversalDataType.INTEGER,
-            'bigint': UniversalDataType.BIGINT,
-            'smallint': UniversalDataType.SMALLINT,
-            'serial': UniversalDataType.INTEGER,  # Auto-incrementing integer
-            'bigserial': UniversalDataType.BIGINT,  # Auto-incrementing bigint
-            'smallserial': UniversalDataType.SMALLINT,  # Auto-incrementing smallint
-            'real': UniversalDataType.FLOAT,
-            'double precision': UniversalDataType.DOUBLE,
-            'numeric': UniversalDataType.DECIMAL,
-            'decimal': UniversalDataType.DECIMAL,
-            'varchar': UniversalDataType.VARCHAR,
-            'character varying': UniversalDataType.VARCHAR,  # PostgreSQL's actual VARCHAR type
-            'text': UniversalDataType.TEXT,
-            'char': UniversalDataType.CHAR,
-            'character': UniversalDataType.CHAR,  # PostgreSQL's actual CHAR type
-            'date': UniversalDataType.DATE,
-            'time': UniversalDataType.TIME,
-            'timestamp': UniversalDataType.TIMESTAMP,
-            'timestamp without time zone': UniversalDataType.TIMESTAMP,
-            'timestamp with time zone': UniversalDataType.TIMESTAMP,
-            'timestamptz': UniversalDataType.TIMESTAMP,
-            'datetime': UniversalDataType.DATETIME,
-            'boolean': UniversalDataType.BOOLEAN,
-            'bool': UniversalDataType.BOOLEAN,
-            'bytea': UniversalDataType.BLOB,
-            'json': UniversalDataType.JSON,
-            'jsonb': UniversalDataType.JSON,
-            'uuid': UniversalDataType.UUID,
-        }
-        
-        normalized_type = source_type.lower().strip()
-        
-        # Handle types with precision/scale (e.g., timestamp(6), varchar(255))
-        base_type = normalized_type.split('(')[0] if '(' in normalized_type else normalized_type
-        return type_mapping.get(base_type, UniversalDataType.TEXT)
+        """Map type - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return self._datastore._datastore_impl.map_source_type_to_universal(source_type)
     
     def map_universal_type_to_target(self, universal_type: UniversalDataType) -> str:
-        """Map universal type to PostgreSQL type"""
-        type_mapping = {
-            UniversalDataType.INTEGER: 'INTEGER',
-            UniversalDataType.BIGINT: 'BIGINT',
-            UniversalDataType.SMALLINT: 'SMALLINT',
-            UniversalDataType.FLOAT: 'REAL',
-            UniversalDataType.DOUBLE: 'DOUBLE PRECISION',
-            UniversalDataType.DECIMAL: 'NUMERIC',
-            UniversalDataType.VARCHAR: 'VARCHAR(255)',
-            UniversalDataType.TEXT: 'TEXT',
-            UniversalDataType.CHAR: 'CHAR(1)',
-            UniversalDataType.DATE: 'DATE',
-            UniversalDataType.TIME: 'TIME',
-            UniversalDataType.TIMESTAMP: 'TIMESTAMP',
-            UniversalDataType.DATETIME: 'TIMESTAMP',
-            UniversalDataType.BOOLEAN: 'BOOLEAN',
-            UniversalDataType.BLOB: 'BYTEA',
-            UniversalDataType.JSON: 'JSONB',
-            UniversalDataType.UUID: 'UUID',
-        }
-        return type_mapping.get(universal_type, 'TEXT')
+        """Map type - delegates to datastore"""
+        if not self._datastore:
+            raise RuntimeError("No datastore configured for this backend")
+        return self._datastore._datastore_impl.map_universal_type_to_target(universal_type)

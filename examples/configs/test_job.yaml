@@ -20,19 +20,19 @@ column_map:
   - name: 'id'
     src: 'id'
     dest: 'id'
-    unique_key: true
-    order_key: true
-    dtype: 'int'
+    unique_column: true
+    order_column: true
+    data_type: 'int'
   - name: 'name'
     src: 'name'
     dest: 'name'
-    dtype: 'varchar'
+    data_type: 'varchar'
   - name: 'updated_at'
     src: 'updated_at'
     dest: 'updated_at'
-    dtype: 'timestamp'
+    data_type: 'timestamp'
 
-partition_key: 'id'
+partition_column: 'id'
 partition_step: 1000
 
 strategies:
