@@ -56,3 +56,25 @@ config_manager:
     #   db_password: "password"
     #   db_name: "synctool_config"
     #   table_prefix: "synctool_config"
+
+# Build System - Configuration for building and deploying pipelines
+build_system:
+  user_config_dir: "./examples/configs/pipelines"
+  built_config_dir: "./examples/configs/built"
+  datastores_path: "./examples/configs/datastores.yaml"
+  auto_build_on_startup: true
+  # How to handle DDL checks during auto-build: "required" | "optional" | "skip"
+  # required: Skip auto-build if DDL changes detected (requires manual deploy)
+  # optional: Build anyway, log warning (risky - might fail at runtime)
+  # skip: Don't check DDL on auto-build (fastest, but no DDL validation)
+  ddl_check_on_build: "required"
+  # What to do when build fails: "keep_old" | "remove"
+  # keep_old: Keep previous built config if rebuild fails (recommended)
+  # remove: Remove from built/ if rebuild fails (scheduler won't run it)
+  on_build_failure: "keep_old"
+  # Whether to remove orphaned configs (in built/ but not in source)
+  remove_orphaned_configs: true
+  # Allow empty source directory (useful for initial deployment)
+  allow_empty_source_dir: true
+  # Build lock timeout in seconds
+  build_lock_timeout: 30
