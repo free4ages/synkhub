@@ -2,6 +2,8 @@
 
 A powerful, production-ready data synchronization tool for modern data engineering workflows. SyncTool provides intelligent, incremental data synchronization between databases with advanced features like automatic DDL management, distributed scheduling, and pipeline-based processing.
 
+https://github.com/free4ages/synkhub/raw/refs/heads/pipeline/synchub.mp4
+
 ## 🌟 Features
 
 ### Core Capabilities
